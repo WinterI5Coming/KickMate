@@ -1,0 +1,14 @@
+{
+  "$comment": "기물별 이동·능력 수치 — 밸런스 조정의 1차 지점. 바꾼 뒤 npm run selfplay로 승률 변화를 확인합니다.",
+  "roles": {
+    "GK": { "move": { "pattern": "box", "range": 1 }, "note": "박스 안 1칸" },
+    "DF": { "move": { "pattern": "line", "range": 2 }, "note": "직선 2칸" },
+    "MF": { "move": { "pattern": "omni", "range": 2 }, "note": "전방향 2칸" },
+    "FW": { "move": { "pattern": "knight", "range": 1 }, "note": "나이트 점프" }
+  },
+  "rules": {
+    "passDirections": 8,
+    "stealProtectionTurns": 1,
+    "maxTurns": 60
+  }
+}

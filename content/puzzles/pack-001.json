@@ -1,0 +1,21 @@
+{
+  "$comment": "퍼즐 팩 예시 — 'N턴 안에 골'. setup의 배치는 예시이며 룰 이식(S1) 후 엔진 검산이 붙습니다.",
+  "pack": "튜토리얼",
+  "puzzles": [
+    {
+      "id": "tut-001",
+      "title": "첫 골",
+      "goalInTurns": 2,
+      "sideToMove": "home",
+      "setup": {
+        "pieces": [
+          { "team": "home", "role": "FW", "x": 10, "y": 4 },
+          { "team": "home", "role": "MF", "x": 8, "y": 3 },
+          { "team": "away", "role": "GK", "x": 12, "y": 5 },
+          { "team": "away", "role": "DF", "x": 9, "y": 4 }
+        ],
+        "ball": { "heldBy": { "team": "home", "role": "MF" } }
+      }
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "$comment": "UI에 뜨는 모든 문구. 게임의 목소리는 여기서 만듭니다 — 비개발자 존.",
+  "app": {
+    "title": "KickMate — 축구의 chess.com"
+  },
+  "judgement": {
+    "best": "최선",
+    "good": "좋은 수",
+    "inaccuracy": "부정확",
+    "mistake": "실수",
+    "blunder": "블런더!"
+  },
+  "match": {
+    "goal": "골!",
+    "save": "선방!",
+    "steal": "스틸!",
+    "turnLimit": "60수 종료"
+  }
+}

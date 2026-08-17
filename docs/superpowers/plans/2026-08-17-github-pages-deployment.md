@@ -207,7 +207,7 @@ Expected: 배포 워크플로와 승인된 문서만 포함한 커밋 1개.
 - Consumes: `origin/main`의 Task 1~2 커밋
 - Produces: 공개 KickMate Pages URL
 
-- [ ] **Step 1: 로컬 커밋을 GitHub에 push**
+- [x] **Step 1: 로컬 커밋을 GitHub에 push**
 
 ```powershell
 git push origin main
@@ -215,7 +215,7 @@ git push origin main
 
 Expected: `origin/main`이 로컬 `main`과 같은 커밋을 가리킨다.
 
-- [ ] **Step 2: GitHub Pages Source 설정**
+- [x] **Step 2: GitHub Pages Source 설정**
 
 GitHub 저장소에서 다음 메뉴를 연다.
 
@@ -225,7 +225,7 @@ Settings → Pages → Build and deployment → Source → GitHub Actions
 
 Expected: Pages Source가 GitHub Actions로 표시된다.
 
-- [ ] **Step 3: Actions 결과 확인**
+- [x] **Step 3: Actions 결과 확인**
 
 GitHub의 `Actions` 탭에서 `Deploy GitHub Pages` 실행을 연다.
 
@@ -238,7 +238,7 @@ deploy 성공
 
 실패하면 실패한 step의 전체 로그를 보존하고 다음 step으로 진행하지 않는다.
 
-- [ ] **Step 4: 외부 URL 실제 플레이 확인**
+- [x] **Step 4: 외부 URL 실제 플레이 확인**
 
 Open:
 
@@ -254,7 +254,7 @@ https://winteri5coming.github.io/KickMate/
 4. 한 수를 두면 Worker 봇이 응수한다.
 5. Console과 Network에 404 또는 Worker 로딩 오류가 없다.
 
-- [ ] **Step 5: 배포 완료 상태 기록**
+- [x] **Step 5: 배포 완료 상태 기록**
 
 `docs/current-state.md`의 GitHub Pages 상태를 완료로 바꾸고 실제 URL과 확인 날짜를 기록한다.
 

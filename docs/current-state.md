@@ -4,7 +4,7 @@
 구조적 원칙은 [architecture.md](./architecture.md), 전체 로드맵은
 [project-plan.md](./project-plan.md)를 참고한다.
 
-마지막 확인일: 2026-08-17
+마지막 확인일: 2026-08-18
 
 ## 요약
 
@@ -22,7 +22,7 @@ Canvas 입력과 렌더링      완료
 사용자 대 봇 경기 흐름    구현 완료
 경기 후 분석·리뷰         미구현
 셀프플레이 CLI            미구현
-GitHub Pages 배포         준비 전
+GitHub Pages 배포         완료
 ```
 
 ## 최근 검증
@@ -47,6 +47,11 @@ content 검증               통과
 확인했다. 같은 사용자 환경에서 `npm run build`도 12개 모듈과 Worker 번들을 변환하며
 233ms에 통과했다. 관리형 Codex 환경의 Vite 실행은 `spawn EPERM`으로 차단되므로 실제
 빌드 결과는 사용자 터미널 출력을 완료 근거로 사용한다.
+
+2026-08-18에는 GitHub Actions의 Pages `build`와 `deploy` job이 모두 성공했다.
+[`https://winteri5coming.github.io/KickMate/`](https://winteri5coming.github.io/KickMate/)에서
+새로고침, 실제 경기 플레이와 Worker 봇 응수를 확인했으며 브라우저 Console 오류와
+Network 404가 없음을 확인했다.
 
 ## 현재 실행 흐름
 
@@ -125,19 +130,16 @@ index.html의 DOM 이벤트
 - `tools/selfplay.ts` 실제 경기·통계 출력
 - 퍼즐 JSON 실행과 제한 턴 내 해법 검산
 - `content/pieces.json` 규칙값의 엔진 주입
-- GitHub Actions 기반 Pages 배포
 
 ## 알려진 제약
 
 - `tools/selfplay.ts`는 아직 안내만 출력하고 종료 코드 1을 반환한다.
 - `content/pieces.json`의 규칙 수치는 검증되지만 엔진은 현재 같은 값을 코드 상수로 사용한다.
 - 슛 경로의 첫 기물은 팀과 역할에 관계없이 공을 소유해 슛을 막는다. 유지 여부는 실험 정책이다.
-- 실제 모바일 브라우저와 외부 배포 URL 검증은 아직 수행하지 않았다.
-- 프로덕션 빌드는 GitHub Actions 또는 사용자 터미널에서 다시 확인해야 한다.
+- 실제 모바일 브라우저 검증은 아직 수행하지 않았다.
 
 ## 다음 우선순위
 
-1. 수정된 아군 패스 후보 테두리를 실제 브라우저에서 확인
-2. 현재 S2 변경을 한국어 커밋 메시지로 보존하고 GitHub `main`에 push
-3. GitHub Pages 빌드·배포 워크플로 작성
-4. M3 경기 후 분석과 블런더 리뷰 설계
+1. M3 경기 후 분석과 블런더 리뷰 설계
+2. `tools/selfplay.ts` 실제 경기·통계 출력 구현
+3. 퍼즐 실행과 제한 턴 내 해법 검산

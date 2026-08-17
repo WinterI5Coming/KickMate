@@ -12,6 +12,8 @@ OpenAI Game Builders Seoul 해커톤 출품작 (Track 1 제출: 2026-08-26, 웹 
 
 ## 시작하기
 
+Node.js 22.6 이상이 필요하다 (`npm run validate`가 내장 TypeScript 타입 제거를 사용한다).
+
 ```bash
 npm install
 npm run dev      # 개발 서버 (브라우저로 열림)

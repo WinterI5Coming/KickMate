@@ -6,7 +6,7 @@
 
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { BOARD_H, BOARD_W } from "../src/engine/types";
+import { BOARD_H, BOARD_W } from "../src/engine/types.ts";
 
 const CONTENT_DIR = join(import.meta.dirname, "..", "content");
 const ROLES = ["GK", "DF", "MF", "FW"] as const;

@@ -9,7 +9,7 @@
  * 셀프플레이가 동일한 규칙을 공유하기 위한 경계다.
  */
 
-import type { GameState, Move, Piece, Pos, Team } from "./types";
+import type { GameResult, GameState, Move, Piece, Pos, Team } from "./types";
 import { BOARD_H, BOARD_W } from "./types";
 
 /**
@@ -36,6 +36,9 @@ const PASS_MAX = 6;
 
 /** 공 소유자에서 상대 골라인까지 슛을 시도할 수 있는 최대 x 거리. */
 const SHOT_MAX = 7;
+
+/** 한 팀이 이 점수에 먼저 도달하면 최대 ply 전에 경기를 끝낸다. */
+export const WIN_SCORE = 3;
 
 /**
  * 상하좌우와 네 대각선의 단위 변화량.
@@ -91,6 +94,29 @@ export function sideToMove(state: GameState): Team {
 /** 득점 팀의 반대편, 즉 다음 킥오프를 수행할 실점 팀을 구한다. */
 function otherTeam(team: Team): Team {
   return team === "home" ? "away" : "home";
+}
+
+/**
+ * 현재 상태가 끝난 경기인지 계산한다.
+ *
+ * 종료 결과는 상태에 별도로 저장하지 않는다. 점수와 턴이라는 원본 정보에서 매번
+ * 계산하면 상태 전이 중 결과 필드만 갱신하지 않는 불일치를 피할 수 있다.
+ */
+export function gameResult(state: GameState): GameResult | null {
+  if (state.score.home >= WIN_SCORE) {
+    return { kind: "win", winner: "home", reason: "scoreLimit" };
+  }
+  if (state.score.away >= WIN_SCORE) {
+    return { kind: "win", winner: "away", reason: "scoreLimit" };
+  }
+  if (state.turn < state.maxTurns) return null;
+  if (state.score.home > state.score.away) {
+    return { kind: "win", winner: "home", reason: "turnLimit" };
+  }
+  if (state.score.away > state.score.home) {
+    return { kind: "win", winner: "away", reason: "turnLimit" };
+  }
+  return { kind: "draw", reason: "turnLimit" };
 }
 
 /**
@@ -198,10 +224,10 @@ export function createInitialState(): GameState {
  * 가졌다면 조건에 맞는 스틸을 추가한다. 이 결정적인 순서는 탐색 결과와 테스트를
  * 재현할 수 있게 하는 엔진의 중요한 성질이다.
  *
- * `turn >= maxTurns`인 상태는 경기가 끝난 것으로 취급하므로 가능한 수가 없다.
+ * 3골 선취 또는 `turn >= maxTurns`인 상태는 경기가 끝난 것으로 취급하므로 가능한 수가 없다.
  */
 export function legalMoves(state: GameState): Move[] {
-  if (state.turn >= state.maxTurns) return [];
+  if (gameResult(state) !== null) return [];
 
   const team = sideToMove(state);
   const moves: Move[] = [];

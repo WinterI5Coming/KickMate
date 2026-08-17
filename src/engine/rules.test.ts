@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { evalLv1 } from "./eval/lv1";
-import { applyMove, createInitialState, inBounds, legalMoves, sideToMove } from "./rules";
+import {
+  applyMove,
+  createInitialState,
+  gameResult,
+  inBounds,
+  legalMoves,
+  sideToMove,
+} from "./rules";
 import { search } from "./search";
 import { BOARD_H, BOARD_W, type GameState, type Pos } from "./types";
 
@@ -154,5 +161,100 @@ describe("평가와 탐색", () => {
     expect(finished.turn).toBe(60);
     expect(legalMoves(finished)).toEqual([]);
     expect(search(finished, { depth: 2, evalFn: evalLv1 }).best).toBeNull();
+  });
+});
+
+describe("경기 종료", () => {
+  it("home이 3골에 도달하면 즉시 승리하고 더는 수를 만들지 않는다", () => {
+    const state = createInitialState();
+    state.score.home = 3;
+
+    expect(gameResult(state)).toEqual({
+      kind: "win",
+      winner: "home",
+      reason: "scoreLimit",
+    });
+    expect(legalMoves(state)).toEqual([]);
+    expect(search(state, { depth: 2, evalFn: evalLv1 }).best).toBeNull();
+  });
+
+  it("away가 3골에 도달하면 즉시 승리한다", () => {
+    const state = createInitialState();
+    state.score.away = 3;
+
+    expect(gameResult(state)).toEqual({
+      kind: "win",
+      winner: "away",
+      reason: "scoreLimit",
+    });
+  });
+
+  it.each([
+    [{ home: 2, away: 1 }, { kind: "win", winner: "home", reason: "turnLimit" }],
+    [{ home: 1, away: 2 }, { kind: "win", winner: "away", reason: "turnLimit" }],
+    [{ home: 2, away: 2 }, { kind: "draw", reason: "turnLimit" }],
+  ] as const)("60 ply 결과를 점수로 판정한다: %o", (score, expected) => {
+    const state = createInitialState();
+    state.turn = state.maxTurns;
+    state.score = { ...score };
+
+    expect(gameResult(state)).toEqual(expected);
+    expect(legalMoves(state)).toEqual([]);
+    expect(search(state, { depth: 2, evalFn: evalLv1 }).best).toBeNull();
+  });
+
+  it("3골과 60 ply에 도달하지 않으면 진행 중이다", () => {
+    const state = createInitialState();
+    state.turn = 59;
+    state.score = { home: 2, away: 2 };
+
+    expect(gameResult(state)).toBeNull();
+    expect(legalMoves(state).length).toBeGreaterThan(0);
+  });
+});
+
+describe("완주 시뮬레이션", () => {
+  it("서로 다른 합법 수 선택으로 진행한 64경기가 상태 불변식을 지키며 종료된다", () => {
+    for (let gameIndex = 0; gameIndex < 64; gameIndex += 1) {
+      let state = createInitialState();
+      let selector = gameIndex + 1;
+
+      while (gameResult(state) === null) {
+        const moves = legalMoves(state);
+        expect(moves.length, `game ${gameIndex}, ply ${state.turn}`).toBeGreaterThan(0);
+
+        selector = (selector * 73 + 41) % 1_000_003;
+        const move = moves[selector % moves.length]!;
+        const previous = state;
+        state = applyMove(state, move);
+
+        expect(state.turn).toBe(previous.turn + 1);
+        expect(state.turn).toBeLessThanOrEqual(state.maxTurns);
+        expect(state.pieces).toHaveLength(8);
+        expect(new Set(state.pieces.map((piece) => piece.id)).size).toBe(8);
+        expect(new Set(state.pieces.map((piece) => `${piece.pos.x},${piece.pos.y}`)).size).toBe(8);
+        expect(state.pieces.every((piece) => inBounds(piece.pos))).toBe(true);
+        expect(state.noSteal === 0 || state.noSteal === 1).toBe(true);
+
+        const previousGoals = previous.score.home + previous.score.away;
+        const currentGoals = state.score.home + state.score.away;
+        expect(currentGoals - previousGoals === 0 || currentGoals - previousGoals === 1).toBe(true);
+
+        const ball = state.ball;
+        if (ball.kind === "held") {
+          expect(state.pieces.some((piece) => piece.id === ball.pieceId)).toBe(true);
+        } else {
+          expect(inBounds(ball.pos)).toBe(true);
+          expect(
+            state.pieces.some(
+              (piece) => piece.pos.x === ball.pos.x && piece.pos.y === ball.pos.y,
+            ),
+          ).toBe(false);
+        }
+      }
+
+      expect(gameResult(state)).not.toBeNull();
+      expect(legalMoves(state)).toEqual([]);
+    }
   });
 });

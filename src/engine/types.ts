@@ -109,6 +109,17 @@ export interface GameState {
 }
 
 /**
+ * 현재 `GameState`에서 계산한 경기 종료 결과.
+ *
+ * `kind`를 먼저 검사하면 TypeScript가 승리 결과에서만 `winner`를 사용할 수 있게
+ * 타입을 좁힌다. 결과는 `GameState`에 저장하지 않고 룰 함수가 계산하므로 점수·턴과
+ * 종료 정보가 서로 어긋나는 중복 상태를 만들지 않는다.
+ */
+export type GameResult =
+  | { kind: "win"; winner: Team; reason: "scoreLimit" | "turnLimit" }
+  | { kind: "draw"; reason: "turnLimit" };
+
+/**
  * 한 ply에 적용할 수 있는 행동의 판별 유니온.
  *
  * 모든 행동은 `kind`와 실행 기물의 `pieceId`를 가진다. `kind`를 검사하면 해당

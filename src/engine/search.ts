@@ -9,7 +9,7 @@
  * 반환한다. 단, 실행 시간인 `ms`는 환경과 실행 시점에 따라 달라질 수 있다.
  */
 
-import { applyMove, legalMoves, sideToMove } from "./rules";
+import { applyMove, gameResult, legalMoves, sideToMove } from "./rules";
 import { BOARD_W, type EvalFn, type GameState, type Move, type SearchResult } from "./types";
 
 /** `search()`를 호출할 때 정하는 탐색 깊이와 말단 상태 평가 방법. */
@@ -94,7 +94,7 @@ function orderedMoves(state: GameState): Move[] {
 /**
  * 현재 상태를 지정 깊이까지 탐색하여 최선 수와 모든 루트 후보의 분석 정보를 반환한다.
  *
- * 반환 점수는 항상 루트에서 현재 차례인 팀의 관점이다. 이미 최대 턴에 도달했거나
+ * 반환 점수는 항상 루트에서 현재 차례인 팀의 관점이다. 이미 종료된 경기이거나
  * `depth <= 0`이면 후보를 전개하지 않아 `best`는 null이고 현재 상태의 평가만 반환한다.
  * 입력 `state`는 `applyMove()`의 불변성 덕분에 탐색 전후로 변경되지 않는다.
  */
@@ -114,7 +114,7 @@ export function search(state: GameState, options: SearchOptions): SearchResult {
   const negamax = (position: GameState, depth: number, alpha: number, beta: number): number => {
     nodes += 1;
     // 경기 종료 또는 깊이 소진 시 현재 차례 팀 관점으로 말단 상태를 평가한다.
-    if (position.turn >= position.maxTurns || depth === 0) {
+    if (gameResult(position) !== null || depth === 0) {
       return options.evalFn(position, sideToMove(position));
     }
 
@@ -137,7 +137,7 @@ export function search(state: GameState, options: SearchOptions): SearchResult {
   };
 
   // 루트에서 탐색할 수 없는 두 경우에도 일관된 SearchResult 형태를 반환한다.
-  if (state.turn >= state.maxTurns || options.depth <= 0) {
+  if (gameResult(state) !== null || options.depth <= 0) {
     return {
       best: null,
       score: options.evalFn(state, sideToMove(state)),

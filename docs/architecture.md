@@ -62,6 +62,19 @@ index.html
 
 클라이언트는 엔진의 공개 함수와 타입을 사용할 수 있지만 게임 규칙을 다시 구현하면 안 된다.
 
+S2에서 확정한 클라이언트 분리는 다음과 같다. 현재 코드에는 아직 모두 구현되지 않았으며 실제 진행 상태는 [current-state.md](./current-state.md)를 따른다.
+
+```text
+main.ts
+  ├─ gameController.ts  경기와 UI 상태, 턴 흐름
+  ├─ engineClient.ts    Worker 요청·응답과 수명 관리
+  ├─ input.ts           Canvas 클릭을 선택 후보로 변환
+  ├─ render.ts          Canvas와 HTML 출력
+  └─ types.ts           클라이언트 전용 상태 계약
+```
+
+Controller는 상태가 바뀔 때 `onChange(viewState)`를 호출하고 Renderer는 전달받은 상태만 그린다. `legalMoves()`, `applyMove()`, 종료 판정처럼 짧은 계산은 메인 스레드에서 직접 호출하고, 깊이 탐색만 Worker에 맡긴다. 상세 계약은 [TASK-S2-client.md](../reference/TASK-S2-client.md)를 참고한다.
+
 ### Worker 어댑터: `src/worker/`
 
 Worker 계층은 무거운 탐색이 브라우저 UI를 멈추지 않도록 엔진 호출을 별도 스레드로 전달한다.

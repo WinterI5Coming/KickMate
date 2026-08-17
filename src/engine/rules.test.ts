@@ -1,51 +1,158 @@
 import { describe, expect, it } from "vitest";
-import { createInitialState, inBounds, sideToMove } from "./rules";
-import { BOARD_H, BOARD_W } from "./types";
+import { evalLv1 } from "./eval/lv1";
+import { applyMove, createInitialState, inBounds, legalMoves, sideToMove } from "./rules";
+import { search } from "./search";
+import { BOARD_H, BOARD_W, type GameState, type Pos } from "./types";
+
+function setPos(state: GameState, pieceId: number, pos: Pos): void {
+  state.pieces.find((piece) => piece.id === pieceId)!.pos = pos;
+}
 
 describe("초기 국면", () => {
-  it("4대4, 총 8기물", () => {
-    const s = createInitialState();
-    expect(s.pieces).toHaveLength(8);
-    expect(s.pieces.filter((p) => p.team === "home")).toHaveLength(4);
-    expect(s.pieces.filter((p) => p.team === "away")).toHaveLength(4);
+  it("4대4 기물을 프로토타입 배치에 두고 home MF가 킥오프한다", () => {
+    const state = createInitialState();
+
+    expect(state.pieces).toHaveLength(8);
+    expect(state.pieces.map((piece) => [piece.team, piece.role, piece.pos])).toEqual([
+      ["home", "GK", { x: 0, y: 4 }],
+      ["home", "DF", { x: 2, y: 4 }],
+      ["home", "MF", { x: 6, y: 4 }],
+      ["home", "FW", { x: 4, y: 5 }],
+      ["away", "GK", { x: 12, y: 4 }],
+      ["away", "DF", { x: 10, y: 4 }],
+      ["away", "MF", { x: 8, y: 5 }],
+      ["away", "FW", { x: 8, y: 3 }],
+    ]);
+    expect(state.ball).toEqual({ kind: "held", pieceId: 2 });
+    expect(state.noSteal).toBe(0);
+    expect(sideToMove(state)).toBe("home");
   });
 
-  it("팀마다 GK 1명", () => {
-    const s = createInitialState();
-    for (const team of ["home", "away"] as const) {
-      expect(s.pieces.filter((p) => p.team === team && p.role === "GK")).toHaveLength(1);
-    }
+  it("모든 기물이 보드 안에 있고 같은 칸에 겹치지 않는다", () => {
+    const state = createInitialState();
+    const cells = state.pieces.map((piece) => `${piece.pos.x},${piece.pos.y}`);
+
+    expect(state.pieces.every((piece) => inBounds(piece.pos))).toBe(true);
+    expect(new Set(cells).size).toBe(cells.length);
+    expect(state.pieces.filter((piece) => piece.team === "home")).toHaveLength(4);
+    expect(state.pieces.filter((piece) => piece.team === "away")).toHaveLength(4);
   });
 
-  it("모든 기물이 보드 안, 같은 칸 중복 없음", () => {
-    const s = createInitialState();
-    const seen = new Set<string>();
-    for (const p of s.pieces) {
-      expect(inBounds(p.pos)).toBe(true);
-      const key = `${p.pos.x},${p.pos.y}`;
-      expect(seen.has(key)).toBe(false);
-      seen.add(key);
-    }
+  it("초기 국면에 합법 수가 존재한다", () => {
+    expect(legalMoves(createInitialState()).length).toBeGreaterThan(0);
   });
 
-  it("공은 센터 루즈볼, 선공은 home", () => {
-    const s = createInitialState();
-    expect(s.ball).toEqual({
-      kind: "loose",
-      pos: { x: Math.floor(BOARD_W / 2), y: Math.floor(BOARD_H / 2) },
-    });
-    expect(sideToMove(s)).toBe("home");
+  it("모든 이동과 패스 도착점이 보드 안에 있다", () => {
+    const moves = legalMoves(createInitialState());
+    const destinations = moves.flatMap((move) =>
+      move.kind === "move" || move.kind === "pass" ? [move.to] : [],
+    );
+
+    expect(destinations.length).toBeGreaterThan(0);
+    expect(destinations.every(inBounds)).toBe(true);
+  });
+});
+
+describe("수 적용", () => {
+  it("입력 상태를 변경하지 않는다", () => {
+    const state = createInitialState();
+    const before = structuredClone(state);
+    const move = legalMoves(state).find((candidate) => candidate.kind === "move")!;
+
+    applyMove(state, move);
+
+    expect(state).toEqual(before);
   });
 
-  it("배치는 좌우 대칭 (선공 이점 외 구조적 편향 없음)", () => {
-    const s = createInitialState();
-    const homes = s.pieces.filter((p) => p.team === "home");
-    const aways = s.pieces.filter((p) => p.team === "away");
-    for (const h of homes) {
-      const mirror = aways.find(
-        (a) => a.role === h.role && a.pos.x === BOARD_W - 1 - h.pos.x && a.pos.y === h.pos.y,
-      );
-      expect(mirror, `${h.role} 대칭 기물 없음`).toBeDefined();
-    }
+  it("빈 경로 슛은 득점하고 실점 팀 킥오프로 초기 배치한다", () => {
+    const state = createInitialState();
+    setPos(state, 4, { x: 12, y: 0 });
+    setPos(state, 5, { x: 10, y: 1 });
+
+    const shoot = legalMoves(state).find(
+      (move) => move.kind === "shoot" && move.pieceId === 2,
+    );
+    expect(shoot).toBeDefined();
+    const before = structuredClone(state);
+
+    const next = applyMove(state, shoot!);
+
+    expect(state).toEqual(before);
+    expect(next.score).toEqual({ home: 1, away: 0 });
+    expect(next.turn).toBe(1);
+    expect(sideToMove(next)).toBe("away");
+    expect(next.ball).toEqual({ kind: "held", pieceId: 6 });
+    expect(next.pieces.find((piece) => piece.id === 2)?.pos).toEqual({ x: 4, y: 3 });
+    expect(next.pieces.find((piece) => piece.id === 6)?.pos).toEqual({ x: 6, y: 4 });
+  });
+
+  it("슛 경로의 첫 기물이 선방하고 공을 소유한다", () => {
+    const state = createInitialState();
+    setPos(state, 4, { x: 12, y: 0 });
+    setPos(state, 5, { x: 9, y: 4 });
+
+    const shoot = legalMoves(state).find(
+      (move) => move.kind === "shoot" && move.pieceId === 2,
+    );
+    const next = applyMove(state, shoot!);
+
+    expect(next.score).toEqual({ home: 0, away: 0 });
+    expect(next.ball).toEqual({ kind: "held", pieceId: 5 });
+    expect(next.noSteal).toBe(1);
+    expect(next.turn).toBe(1);
+  });
+
+  it("스틸 직후 한 수 동안 재스틸을 막는다", () => {
+    const state = createInitialState();
+    state.turn = 1;
+    setPos(state, 7, { x: 7, y: 4 });
+
+    const steal = legalMoves(state).find(
+      (move) => move.kind === "steal" && move.pieceId === 7 && move.targetPieceId === 2,
+    );
+    expect(steal).toBeDefined();
+
+    const next = applyMove(state, steal!);
+
+    expect(next.ball).toEqual({ kind: "held", pieceId: 7 });
+    expect(next.noSteal).toBe(1);
+    expect(legalMoves(next).some((move) => move.kind === "steal")).toBe(false);
+  });
+});
+
+describe("평가와 탐색", () => {
+  it("대칭 국면의 1점 차를 관점에 따라 반대 부호로 평가한다", () => {
+    const state = createInitialState();
+    setPos(state, 2, { x: 4, y: 3 });
+    state.ball = { kind: "loose", pos: { x: 6, y: 4 } };
+    state.score.home = 1;
+
+    expect(evalLv1(state, "home")).toBe(10_000);
+    expect(evalLv1(state, "away")).toBe(-10_000);
+  });
+
+  it("같은 입력은 루트 후보 점수까지 같은 탐색 결과를 낸다", () => {
+    const state = createInitialState();
+    const options = { depth: 2, evalFn: evalLv1 };
+
+    const first = search(state, options);
+    const second = search(state, options);
+
+    expect({ ...first, ms: 0 }).toEqual({ ...second, ms: 0 });
+    expect(first.ms).toBeGreaterThanOrEqual(0);
+    expect(first.best).not.toBeNull();
+    expect(first.values.length).toBeGreaterThan(0);
+    expect(first.values[0]).toEqual(expect.objectContaining({ move: expect.any(Object) }));
+  });
+
+  it("60수에 도달하면 합법 수와 최선 수가 없다", () => {
+    const state = createInitialState();
+    state.turn = state.maxTurns - 1;
+    const lastMove = legalMoves(state)[0]!;
+    const finished = applyMove(state, lastMove);
+
+    expect(finished.turn).toBe(60);
+    expect(legalMoves(finished)).toEqual([]);
+    expect(search(finished, { depth: 2, evalFn: evalLv1 }).best).toBeNull();
   });
 });

@@ -5,12 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>KickMate — 축구의 chess.com</title>
     <style>
+      /* 페이지 레이아웃 */
       body { margin: 0; display: grid; place-items: center; min-height: 100vh; background: #1a1f16; }
       canvas { max-width: 100vw; height: auto; }
     </style>
   </head>
   <body>
     <canvas id="board" width="1040" height="720"></canvas>
+    <!--
+    브라우저 -> /src/client/main.ts 요청 -> Vite가 Ts를 Js로 변환 -> 브라우저에서 실행
+    즉, 브라우저가 Ts를 직접 이해하는 것이 아니다.
+      중간에서 변환 과정이 존재한다.
+    -->
     <script type="module" src="/src/client/main.ts"></script>
   </body>
 </html>

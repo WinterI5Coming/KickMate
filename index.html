@@ -5,18 +5,79 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>KickMate — 축구의 chess.com</title>
     <style>
-      /* 페이지 레이아웃 */
-      body { margin: 0; display: grid; place-items: center; min-height: 100vh; background: #1a1f16; }
-      canvas { max-width: 100vw; height: auto; }
+      * { box-sizing: border-box; }
+      [hidden] { display: none !important; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        padding: 24px;
+        color: #f5f0e6;
+        background: #1a1f16;
+        font-family: system-ui, sans-serif;
+      }
+      #app {
+        display: grid;
+        gap: 16px;
+        width: min(1200px, 100%);
+        margin: 0 auto;
+      }
+      #match-info {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 12px 32px;
+        font-size: 1.1rem;
+      }
+      #status-message {
+        min-height: 1.5em;
+        margin: 0;
+        text-align: center;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: auto;
+        border: 1px solid #3f7d51;
+      }
+      #actions {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 8px;
+      }
+      button {
+        min-width: 96px;
+        padding: 10px 16px;
+        border: 1px solid #f5f0e6;
+        border-radius: 6px;
+        color: #f5f0e6;
+        background: #293325;
+        font: inherit;
+        cursor: pointer;
+      }
+      button[aria-pressed="true"] { outline: 3px solid currentColor; }
+      button:disabled { cursor: not-allowed; opacity: 0.55; }
+      #start-game,
+      #new-game { justify-self: center; }
     </style>
   </head>
   <body>
-    <canvas id="board" width="1040" height="720"></canvas>
-    <!--
-    브라우저 -> /src/client/main.ts 요청 -> Vite가 Ts를 Js로 변환 -> 브라우저에서 실행
-    즉, 브라우저가 Ts를 직접 이해하는 것이 아니다.
-      중간에서 변환 과정이 존재한다.
-    -->
+    <main id="app">
+      <section id="match-info" aria-live="polite">
+        <span>HOME <strong id="score-home">0</strong></span>
+        <span>AWAY <strong id="score-away">0</strong></span>
+        <span id="turn-info">0 / 60 ply</span>
+      </section>
+      <p id="status-message" role="status">게임을 시작하세요.</p>
+      <canvas id="board" width="1200" height="720" aria-label="KickMate 경기장"></canvas>
+      <section id="actions" aria-label="기물 행동">
+        <button id="action-move" type="button" hidden>이동</button>
+        <button id="action-pass" type="button" hidden>패스</button>
+        <button id="action-shoot" type="button" hidden>슛</button>
+      </section>
+      <button id="start-game" type="button">게임 시작</button>
+      <button id="new-game" type="button" hidden>새 게임</button>
+    </main>
     <script type="module" src="/src/client/main.ts"></script>
   </body>
 </html>

@@ -11,6 +11,40 @@ import { BOARD_H, BOARD_W } from "../src/engine/types.ts";
 const CONTENT_DIR = join(import.meta.dirname, "..", "content");
 const ROLES = ["GK", "DF", "MF", "FW"] as const;
 const TEAMS = ["home", "away"] as const;
+const BOARD_COLORS = [
+  "grass",
+  "line",
+  "ball",
+  "pieceText",
+  "selected",
+  "moveTarget",
+  "passTarget",
+  "shootTarget",
+  "stealTarget",
+  "lastMove",
+] as const;
+const MATCH_STRINGS = [
+  "goal",
+  "save",
+  "steal",
+  "turnLimit",
+  "start",
+  "newGame",
+  "move",
+  "pass",
+  "shoot",
+  "ready",
+  "humanTurn",
+  "botThinking",
+  "botRetry",
+  "homeWin",
+  "awayWin",
+  "draw",
+  "selectOwn",
+  "cannotSteal",
+  "invalidShot",
+  "fatalError",
+] as const;
 
 const errors: string[] = [];
 const fail = (file: string, msg: string) => errors.push(`${file}: ${msg}`);
@@ -29,7 +63,7 @@ function loadJson(relPath: string): any {
 const theme = loadJson("theme.json");
 if (theme) {
   const isColor = (v: unknown) => typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v);
-  for (const key of ["grass", "line", "ball", "pieceText"]) {
+  for (const key of BOARD_COLORS) {
     if (!isColor(theme.board?.[key])) fail("theme.json", `board.${key}가 #rrggbb 색이 아님`);
   }
   for (const key of TEAMS) {
@@ -51,6 +85,11 @@ if (strings) {
   walk(strings, "");
   for (const section of ["app", "judgement", "match"]) {
     if (!strings[section]) fail("strings.json", `필수 섹션 ${section} 없음`);
+  }
+  for (const key of MATCH_STRINGS) {
+    if (typeof strings.match?.[key] !== "string" || strings.match[key].trim() === "") {
+      fail("strings.json", `match.${key}가 비어 있거나 문자열이 아님`);
+    }
   }
 }
 

@@ -4,7 +4,13 @@
     "grass": "#2d6a3f",
     "line": "#3f7d51",
     "ball": "#f5f0e6",
-    "pieceText": "#ffffff"
+    "pieceText": "#ffffff",
+    "selected": "#ffd166",
+    "moveTarget": "#8ecae6",
+    "passTarget": "#90be6d",
+    "shootTarget": "#ffb703",
+    "stealTarget": "#ff4d6d",
+    "lastMove": "#bdb2ff"
   },
   "team": {
     "home": "#1f5fbf",

@@ -14,6 +14,22 @@
     "goal": "골!",
     "save": "선방!",
     "steal": "스틸!",
-    "turnLimit": "60수 종료"
+    "turnLimit": "60수 종료",
+    "start": "게임 시작",
+    "newGame": "새 게임",
+    "move": "이동",
+    "pass": "패스",
+    "shoot": "슛",
+    "ready": "게임을 시작하세요.",
+    "humanTurn": "내 차례입니다.",
+    "botThinking": "봇이 생각 중입니다.",
+    "botRetry": "봇 분석을 다시 시도합니다.",
+    "homeWin": "승리했습니다!",
+    "awayWin": "봇이 승리했습니다.",
+    "draw": "무승부입니다.",
+    "selectOwn": "먼저 내 기물을 선택하세요.",
+    "cannotSteal": "이 기물은 스틸할 수 없습니다.",
+    "invalidShot": "선택한 방향으로 슛할 수 없습니다.",
+    "fatalError": "봇 분석에 실패했습니다. 새 게임을 시작해 주세요."
   }
 }

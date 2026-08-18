@@ -48,7 +48,7 @@ export interface Pos {
  * 경기장 위 기물 한 개.
  *
  * `id`는 공 소유와 Move가 기물을 안정적으로 참조하는 식별자다. 현재 초기 상태는
- * home 0..3, away 4..7을 사용한다. 타입은 ID의 고유성이나 좌표 중복까지 검사하지
+ * home 0..5, away 6..11을 사용한다. 타입은 ID의 고유성이나 좌표 중복까지 검사하지
  * 않으며, 그 불변 조건은 상태 생성 함수와 테스트가 책임진다.
  */
 export interface Piece {
@@ -92,7 +92,7 @@ export interface GameState {
   turn: number;
   /** 이 값에 도달하면 더 이상 합법 수를 만들지 않는다. 현재 기본값은 60 ply다. */
   maxTurns: number;
-  /** 경기 중인 8개 기물. 현재 룰은 양 팀 GK/DF/MF/FW 각 1명을 전제로 한다. */
+  /** 경기 중인 12개 기물. 각 팀은 GK 1명, DF 2명, MF 2명, FW 1명으로 구성된다. */
   pieces: Piece[];
   /** 현재 공의 소유 또는 루즈볼 위치. */
   ball: BallState;
@@ -123,23 +123,43 @@ export type GameResult =
  * 한 ply에 적용할 수 있는 행동의 판별 유니온.
  *
  * 모든 행동은 `kind`와 실행 기물의 `pieceId`를 가진다. `kind`를 검사하면 해당
- * 행동에만 존재하는 `to`, `dy`, `targetPieceId`를 안전하게 사용할 수 있다.
+ * 행동에만 존재하는 `to`, `targetPieceId`, `goalRow`를 안전하게 사용할 수 있다.
  * 이 타입은 행동의 모양만 보장하며 실제 합법 여부는 `legalMoves()`가 결정한다.
  */
 export type Move =
   /** 기물을 빈 목적지 칸으로 이동한다. */
   | { kind: "move"; pieceId: number; to: Pos }
-  /** 공 소유자가 목적지 칸으로 패스한다. 목적지가 비면 루즈볼이 될 수 있다. */
-  | { kind: "pass"; pieceId: number; to: Pos }
-  /**
-   * 공 소유자가 상대 골라인을 향해 슛한다.
-   * `dy`는 가로로 한 칸 진행할 때의 세로 변화량으로 -1은 위 대각선, 0은 직선,
-   * 1은 아래 대각선을 뜻한다. 팀과 현재 위치, dy로 전체 슛 경로를 계산할 수 있어
-   * 별도 목적지 좌표를 저장하지 않는다.
-   */
-  | { kind: "shoot"; pieceId: number; dy: -1 | 0 | 1 }
+  /** 공 소유자가 선택한 아군 기물에게 패스한다. */
+  | { kind: "pass"; pieceId: number; targetPieceId: number }
+  /** 공 소유자가 상대 골문의 위·가운데·아래 행 중 하나를 직접 겨냥한다. */
+  | { kind: "shoot"; pieceId: number; goalRow: 3 | 4 | 5 }
   /** 인접한 상대 공 소유자에게서 공을 빼앗는다. */
   | { kind: "steal"; pieceId: number; targetPieceId: number };
+
+/**
+ * `Move`를 적용하기 전에 계산한 사용자 안내 및 상태 전이용 판정 결과.
+ *
+ * 패스와 슛은 동일한 공 경로를 사용한다. 경로 위 기물이 공을 먼저 만나면 선택한
+ * 대상과 실제 수신자·차단자가 달라질 수 있으므로 그 결과를 명시적으로 보존한다.
+ * `applyMove()`도 이 값을 사용해 화면의 예고와 실제 결과가 어긋나지 않게 한다.
+ */
+export type MovePreview =
+  | { kind: "move"; destination: Pos; picksUpLooseBall: boolean }
+  | {
+      kind: "pass";
+      path: Pos[];
+      targetPieceId: number;
+      receiverPieceId: number;
+      reachesTarget: boolean;
+    }
+  | {
+      kind: "shoot";
+      path: Pos[];
+      goalRow: 3 | 4 | 5;
+      outcome: "goal" | "blocked";
+      blockerPieceId: number | null;
+    }
+  | { kind: "steal"; targetPieceId: number; protectedAfter: true };
 
 /**
  * 한 국면을 특정 팀 관점의 숫자로 바꾸는 평가 함수 계약.

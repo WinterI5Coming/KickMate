@@ -9,7 +9,13 @@
 import strings from "../../content/strings.json";
 import theme from "../../content/theme.json";
 import { gameResult } from "../engine/rules";
-import { BOARD_H, BOARD_W, type GameState, type Pos } from "../engine/types";
+import {
+  BOARD_H,
+  BOARD_W,
+  type GameState,
+  type MovePreview,
+  type Pos,
+} from "../engine/types";
 import { BOARD_GEOMETRY, targetForMove } from "./input";
 import type { CanvasTarget, ClientAction, ClientMessage, ClientViewState } from "./types";
 
@@ -46,6 +52,14 @@ function messageText(message: ClientMessage): string {
       return strings.match.selectOwn;
     case "cannotSteal":
       return strings.match.cannotSteal;
+    case "chooseReceiver":
+      return strings.match.chooseReceiver;
+    case "chooseGoal":
+      return strings.match.chooseGoal;
+    case "chooseStealer":
+      return strings.match.chooseStealer;
+    case "protectedCarrier":
+      return strings.match.protectedCarrier;
     case "invalidShot":
       return strings.match.invalidShot;
     case "botRetry":
@@ -121,6 +135,12 @@ function targetCenter(target: CanvasTarget): { x: number; y: number } | null {
   return null;
 }
 
+/** 미리보기의 실제 수신자·차단자 ID를 Canvas 칸으로만 해석한다. */
+function pieceTarget(gameState: GameState, pieceId: number): CanvasTarget | null {
+  const piece = gameState.pieces.find((candidate) => candidate.id === pieceId);
+  return piece ? { kind: "cell", pos: { ...piece.pos } } : null;
+}
+
 function fillCircle(
   context: CanvasRenderingContext2D,
   x: number,
@@ -186,6 +206,68 @@ function drawLastMove(context: CanvasRenderingContext2D, state: ClientViewState)
   context.stroke();
 }
 
+/** 패스·슛 Preview가 이미 판정한 경로와 성공 여부를 색과 기호로 함께 표시한다. */
+function drawPreviewPath(
+  context: CanvasRenderingContext2D,
+  actor: Pos,
+  resolvedTarget: CanvasTarget,
+  preview: Extract<MovePreview, { kind: "pass" | "shoot" }>,
+): void {
+  const successful =
+    preview.kind === "pass" ? preview.reachesTarget : preview.outcome === "goal";
+  const color = successful ? theme.board.pathSuccess : theme.board.pathBlocked;
+
+  context.fillStyle = color;
+  context.globalAlpha = 0.22;
+  for (const pos of preview.path) {
+    context.fillRect(
+      BOARD_GEOMETRY.originX + pos.x * BOARD_GEOMETRY.cell,
+      BOARD_GEOMETRY.originY + pos.y * BOARD_GEOMETRY.cell,
+      BOARD_GEOMETRY.cell,
+      BOARD_GEOMETRY.cell,
+    );
+  }
+  context.globalAlpha = 1;
+
+  const from = cellCenter(actor);
+  const to = targetCenter(resolvedTarget);
+  if (!to) return;
+  context.strokeStyle = color;
+  context.setLineDash([]);
+  context.lineWidth = 5;
+  context.beginPath();
+  context.moveTo(from.x, from.y);
+  context.lineTo(to.x, to.y);
+  context.stroke();
+  context.fillStyle = color;
+  context.font = `bold ${Math.floor(BOARD_GEOMETRY.cell * 0.32)}px sans-serif`;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(successful ? "✓" : "!", to.x, to.y);
+}
+
+/** 후보 Move와 짝지어진 Preview만 사용해 실제 공 경로를 그린다. */
+function drawPreviewPaths(
+  context: CanvasRenderingContext2D,
+  gameState: GameState,
+  state: ClientViewState,
+): void {
+  for (const candidate of state.candidatePreviews) {
+    const { move, preview } = candidate;
+    if (preview.kind !== "pass" && preview.kind !== "shoot") continue;
+    const actor = gameState.pieces.find((piece) => piece.id === move.pieceId);
+    if (!actor) continue;
+
+    const resolvedTarget =
+      preview.kind === "pass"
+        ? pieceTarget(gameState, preview.receiverPieceId)
+        : preview.outcome === "blocked" && preview.blockerPieceId !== null
+          ? pieceTarget(gameState, preview.blockerPieceId)
+          : targetForMove(gameState, move);
+    if (resolvedTarget) drawPreviewPath(context, actor.pos, resolvedTarget, preview);
+  }
+}
+
 /** 선택된 행동 후보는 채운 원으로, 직접 클릭 스틸 후보는 붉은 테두리로 구분한다. */
 function drawCandidates(
   context: CanvasRenderingContext2D,
@@ -198,10 +280,15 @@ function drawCandidates(
     if (!center) continue;
 
     if (move.kind === "steal") {
+      const stealer =
+        state.selectedStealTargetId === null
+          ? null
+          : gameState.pieces.find((piece) => piece.id === move.pieceId);
+      const stealCenter = stealer ? cellCenter(stealer.pos) : center;
       strokeCircle(
         context,
-        center.x,
-        center.y,
+        stealCenter.x,
+        stealCenter.y,
         BOARD_GEOMETRY.cell * 0.4,
         theme.board.stealTarget,
         6,
@@ -235,6 +322,54 @@ function drawCandidates(
           ? theme.board.passTarget
           : theme.board.shootTarget;
     fillCircle(context, center.x, center.y, BOARD_GEOMETRY.cell * 0.13, color);
+  }
+}
+
+/** 실제 공을 받을 기물과 스틸 보호 상태를 기물 위에 덧그린다. */
+function drawOutcomeHighlights(
+  context: CanvasRenderingContext2D,
+  gameState: GameState,
+  state: ClientViewState,
+): void {
+  for (const { preview } of state.candidatePreviews) {
+    const pieceId =
+      preview.kind === "pass"
+        ? preview.receiverPieceId
+        : preview.kind === "shoot" && preview.outcome === "blocked"
+          ? preview.blockerPieceId
+          : null;
+    if (pieceId === null) continue;
+    const piece = gameState.pieces.find((candidate) => candidate.id === pieceId);
+    if (!piece) continue;
+    const center = cellCenter(piece.pos);
+    strokeCircle(
+      context,
+      center.x,
+      center.y,
+      BOARD_GEOMETRY.cell * 0.43,
+      theme.board.actualReceiver,
+      4,
+    );
+    strokeCircle(
+      context,
+      center.x,
+      center.y,
+      BOARD_GEOMETRY.cell * 0.49,
+      theme.board.actualReceiver,
+      3,
+    );
+  }
+
+  if (gameState.noSteal > 0 && gameState.ball.kind === "held") {
+    const carrierId = gameState.ball.pieceId;
+    const carrier = gameState.pieces.find((piece) => piece.id === carrierId);
+    if (!carrier) return;
+    const center = cellCenter(carrier.pos);
+    context.fillStyle = theme.board.protected;
+    context.font = `bold ${Math.floor(BOARD_GEOMETRY.cell * 0.3)}px sans-serif`;
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText("◆", center.x, center.y - BOARD_GEOMETRY.cell * 0.3);
   }
 }
 
@@ -297,6 +432,8 @@ function drawCanvas(refs: RenderRefs, state: ClientViewState): void {
   drawLastMove(refs.context, state);
   drawCandidates(refs.context, state.gameState, state);
   drawPieces(refs.context, state);
+  drawPreviewPaths(refs.context, state.gameState, state);
+  drawOutcomeHighlights(refs.context, state.gameState, state);
 }
 
 /**

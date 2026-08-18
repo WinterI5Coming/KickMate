@@ -10,7 +10,11 @@
     "passTarget": "#90be6d",
     "shootTarget": "#ffb703",
     "stealTarget": "#ff4d6d",
-    "lastMove": "#bdb2ff"
+    "lastMove": "#bdb2ff",
+    "pathSuccess": "#39d98a",
+    "pathBlocked": "#ff5c5c",
+    "actualReceiver": "#f6c453",
+    "protected": "#d8b4fe"
   },
   "team": {
     "home": "#1f5fbf",

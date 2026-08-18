@@ -9,8 +9,8 @@
  * 반환한다. 단, 실행 시간인 `ms`는 환경과 실행 시점에 따라 달라질 수 있다.
  */
 
-import { applyMove, gameResult, legalMoves, sideToMove } from "./rules";
-import { BOARD_W, type EvalFn, type GameState, type Move, type SearchResult } from "./types";
+import { applyMove, gameResult, legalMoves, previewMove, sideToMove } from "./rules";
+import type { EvalFn, GameState, Move, SearchResult } from "./types";
 
 /** `search()`를 호출할 때 정하는 탐색 깊이와 말단 상태 평가 방법. */
 export interface SearchOptions {
@@ -33,29 +33,6 @@ function now(): number {
 }
 
 /**
- * shoot Move의 궤적에서 슈터와 골라인 사이에 기물이 하나라도 있는지 검사한다.
- *
- * 이 함수는 슛 결과를 적용하지 않고 `moveRank()`가 열린 슛을 먼저 탐색하도록 돕기만
- * 한다. 합법적인 shoot Move가 들어온다는 전제라 슈터의 존재를 non-null assertion으로
- * 표현하며, 경로 위 기물은 팀과 역할에 관계없이 슛을 막는다.
- */
-function shotIsBlocked(state: GameState, move: Extract<Move, { kind: "shoot" }>): boolean {
-  const shooter = state.pieces.find((piece) => piece.id === move.pieceId)!;
-  // home은 오른쪽 골라인, away는 왼쪽 골라인을 향한다.
-  const directionX = shooter.team === "home" ? 1 : -1;
-  const goalX = shooter.team === "home" ? BOARD_W : -1;
-  const distanceToGoal = Math.abs(goalX - shooter.pos.x);
-
-  // 슈터 다음 칸부터 골라인 직전까지 슛의 직선·대각선 궤적을 따라간다.
-  for (let distance = 1; distance < distanceToGoal; distance++) {
-    const x = shooter.pos.x + directionX * distance;
-    const y = shooter.pos.y + move.dy * distance;
-    if (state.pieces.some((piece) => piece.pos.x === x && piece.pos.y === y)) return true;
-  }
-  return false;
-}
-
-/**
  * Move가 좋아 보이는 정도가 아니라 탐색할 순서만 정하는 정렬용 점수를 반환한다.
  *
  * 열린 슛, 막힌 슛, 스틸, 패스, 일반 이동 순으로 먼저 살펴본다. 강제성이 큰 수에서
@@ -64,8 +41,10 @@ function shotIsBlocked(state: GameState, move: Extract<Move, { kind: "shoot" }>)
  */
 function moveRank(state: GameState, move: Move): number {
   switch (move.kind) {
-    case "shoot":
-      return shotIsBlocked(state, move) ? 60 : 100;
+    case "shoot": {
+      const preview = previewMove(state, move);
+      return preview.kind === "shoot" && preview.outcome === "goal" ? 100 : 60;
+    }
     case "steal":
       return 50;
     case "pass":

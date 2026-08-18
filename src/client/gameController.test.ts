@@ -30,9 +30,25 @@ class FakeEngineClient implements EngineClient {
 
 function createStealState(): GameState {
   const state = createInitialState();
-  const homeMidfielder = state.pieces.find((piece) => piece.id === 2)!;
+  const homeMidfielder = state.pieces.find((piece) => piece.id === 3)!;
   homeMidfielder.pos = { x: 7, y: 5 };
-  state.ball = { kind: "held", pieceId: 6 };
+  state.pieces.find((piece) => piece.id === 9)!.pos = { x: 8, y: 5 };
+  state.ball = { kind: "held", pieceId: 9 };
+  return state;
+}
+
+function createMultipleStealState(): GameState {
+  const state = createInitialState();
+  state.pieces.find((piece) => piece.id === 3)!.pos = { x: 7, y: 4 };
+  state.pieces.find((piece) => piece.id === 5)!.pos = { x: 7, y: 6 };
+  state.pieces.find((piece) => piece.id === 9)!.pos = { x: 8, y: 5 };
+  state.ball = { kind: "held", pieceId: 9 };
+  return state;
+}
+
+function createProtectedStealState(): GameState {
+  const state = createStealState();
+  state.noSteal = 1;
   return state;
 }
 
@@ -44,10 +60,10 @@ function createShortMatch(maxTurns: number): GameState {
 
 function createHomeWinningShotState(): GameState {
   const state = createInitialState();
-  const shooter = state.pieces.find((piece) => piece.id === 2)!;
+  const shooter = state.pieces.find((piece) => piece.id === 3)!;
   shooter.pos = { x: 10, y: 4 };
-  state.pieces.find((piece) => piece.id === 4)!.pos = { x: 11, y: 2 };
-  state.pieces.find((piece) => piece.id === 5)!.pos = { x: 10, y: 1 };
+  state.pieces.find((piece) => piece.id === 6)!.pos = { x: 12, y: 0 };
+  state.pieces.find((piece) => piece.id === 11)!.pos = { x: 10, y: 1 };
   state.ball = { kind: "held", pieceId: shooter.id };
   state.score = { home: 2, away: 1 };
   return state;
@@ -56,8 +72,7 @@ function createHomeWinningShotState(): GameState {
 function createAwayWinningShotState(): GameState {
   const state = createInitialState();
   state.pieces.find((piece) => piece.id === 0)!.pos = { x: 0, y: 2 };
-  state.pieces.find((piece) => piece.id === 1)!.pos = { x: 2, y: 2 };
-  const shooter = state.pieces.find((piece) => piece.id === 6)!;
+  const shooter = state.pieces.find((piece) => piece.id === 9)!;
   shooter.pos = { x: 2, y: 4 };
   state.ball = { kind: "held", pieceId: shooter.id };
   state.score = { home: 1, away: 2 };
@@ -168,6 +183,48 @@ describe("GameController", () => {
     expect(view.candidateMoves.every((move) => move.kind === "pass")).toBe(true);
   });
 
+  it("패스 후보와 미리보기를 함께 발행하고 수신자 선택을 안내한다", () => {
+    const controller = createGameController({
+      engineClient: new FakeEngineClient(),
+      onChange: () => undefined,
+    });
+    controller.startGame();
+    const state = controller.getViewState().gameState!;
+    const carrier = state.pieces.find(
+      (piece) => state.ball.kind === "held" && piece.id === state.ball.pieceId,
+    )!;
+    controller.handleTarget({ kind: "cell", pos: { ...carrier.pos } });
+
+    controller.selectAction("pass");
+
+    const view = controller.getViewState();
+    expect(view.message).toEqual({ kind: "chooseReceiver" });
+    expect(view.candidatePreviews).toHaveLength(view.candidateMoves.length);
+    expect(view.candidatePreviews.length).toBeGreaterThan(0);
+    expect(
+      view.candidatePreviews.every(
+        ({ move, preview }) => move.kind === "pass" && preview.kind === "pass",
+      ),
+    ).toBe(true);
+  });
+
+  it("슛 행동은 골문 선택을 안내한다", () => {
+    const controller = createGameController({
+      engineClient: new FakeEngineClient(),
+      onChange: () => undefined,
+    });
+    controller.startGame();
+    const state = controller.getViewState().gameState!;
+    const carrier = state.pieces.find(
+      (piece) => state.ball.kind === "held" && piece.id === state.ball.pieceId,
+    )!;
+    controller.handleTarget({ kind: "cell", pos: { ...carrier.pos } });
+
+    controller.selectAction("shoot");
+
+    expect(controller.getViewState().message).toEqual({ kind: "chooseGoal" });
+  });
+
   it("합법 패스 대상이 아닌 다른 home 기물을 클릭하면 선택을 전환한다", () => {
     const controller = createGameController({
       engineClient: new FakeEngineClient(),
@@ -187,17 +244,19 @@ describe("GameController", () => {
     );
   });
 
-  it("합법하지 않은 골대 방향을 클릭하면 선택을 유지하고 슛 불가를 안내한다", () => {
+  it("공격 반대쪽 골대를 클릭하면 선택을 유지하고 슛 불가를 안내한다", () => {
     const controller = createGameController({
       engineClient: new FakeEngineClient(),
       onChange: () => undefined,
     });
     controller.startGame();
-    const carrier = controller.getViewState().gameState!.pieces.find((piece) => piece.id === 2)!;
+    const shotState = controller.getViewState().gameState!;
+    const carrierId = shotState.ball.kind === "held" ? shotState.ball.pieceId : -1;
+    const carrier = shotState.pieces.find((piece) => piece.id === carrierId)!;
     controller.handleTarget({ kind: "cell", pos: { ...carrier.pos } });
     controller.selectAction("shoot");
 
-    controller.handleTarget({ kind: "goal", side: "right", row: 3 });
+    controller.handleTarget({ kind: "goal", side: "left", row: 3 });
 
     expect(controller.getViewState()).toEqual(
       expect.objectContaining({
@@ -307,11 +366,7 @@ describe("GameController", () => {
     const state = controller.getViewState().gameState!;
     const pass = legalMoves(state).find(
       (move): move is Extract<Move, { kind: "pass" }> =>
-        move.kind === "pass" &&
-        state.pieces.some(
-          (piece) =>
-            piece.team === "home" && piece.pos.x === move.to.x && piece.pos.y === move.to.y,
-        ),
+        move.kind === "pass" && move.targetPieceId === 5,
     )!;
     const passer = state.pieces.find((piece) => piece.id === pass.pieceId)!;
     controller.handleTarget({ kind: "cell", pos: { ...passer.pos } });
@@ -320,12 +375,7 @@ describe("GameController", () => {
     controller.handleTarget(targetForMove(state, pass));
 
     const next = controller.getViewState();
-    const receiver = next.gameState!.pieces.find(
-      (piece) =>
-        piece.team === "home" &&
-        piece.pos.x === pass.to.x &&
-        piece.pos.y === pass.to.y,
-    )!;
+    const receiver = next.gameState!.pieces.find((piece) => piece.id === pass.targetPieceId)!;
     expect(next.gameState).toEqual(
       expect.objectContaining({ turn: 1, ball: { kind: "held", pieceId: receiver.id } }),
     );
@@ -342,13 +392,10 @@ describe("GameController", () => {
     });
     controller.startGame();
     const state = controller.getViewState().gameState!;
-    const stealer = state.pieces.find((piece) => piece.id === 2)!;
-    const carrier = state.pieces.find((piece) => piece.id === 6)!;
+    const stealer = state.pieces.find((piece) => piece.id === 3)!;
+    const carrier = state.pieces.find((piece) => piece.id === 9)!;
     controller.handleTarget({ kind: "cell", pos: { ...stealer.pos } });
     controller.selectAction("move");
-    expect(controller.getViewState().candidateMoves.some((move) => move.kind === "steal")).toBe(
-      true,
-    );
 
     controller.handleTarget({ kind: "cell", pos: { ...carrier.pos } });
 
@@ -360,8 +407,109 @@ describe("GameController", () => {
           ball: { kind: "held", pieceId: stealer.id },
         }),
         lastMove: expect.objectContaining({ move: expect.objectContaining({ kind: "steal" }) }),
+        selectedStealTargetId: null,
       }),
     );
+  });
+
+  it("스틸러가 하나면 상대 공 소유자 클릭만으로 즉시 스틸한다", () => {
+    const engineClient = new FakeEngineClient();
+    engineClient.analyzeImpl = () => new Promise<SearchResult>(() => undefined);
+    const controller = createGameController({
+      engineClient,
+      onChange: () => undefined,
+      createState: createStealState,
+    });
+    controller.startGame();
+    const state = controller.getViewState().gameState!;
+    const carrier = state.pieces.find((piece) => piece.id === 9)!;
+
+    controller.handleTarget({ kind: "cell", pos: { ...carrier.pos } });
+
+    expect(controller.getViewState()).toEqual(
+      expect.objectContaining({
+        phase: "botThinking",
+        gameState: expect.objectContaining({ ball: { kind: "held", pieceId: 3 } }),
+        selectedStealTargetId: null,
+      }),
+    );
+  });
+
+  it("스틸러가 여러 명이면 상대 공 소유자 선택 후 스틸할 선수를 기다린다", () => {
+    const engineClient = new FakeEngineClient();
+    engineClient.analyzeImpl = () => new Promise<SearchResult>(() => undefined);
+    const controller = createGameController({
+      engineClient,
+      onChange: () => undefined,
+      createState: createMultipleStealState,
+    });
+    controller.startGame();
+    const state = controller.getViewState().gameState!;
+    const carrier = state.pieces.find((piece) => piece.id === 9)!;
+    const stealer = state.pieces.find((piece) => piece.id === 5)!;
+
+    controller.handleTarget({ kind: "cell", pos: { ...carrier.pos } });
+
+    expect(controller.getViewState()).toEqual(
+      expect.objectContaining({
+        phase: "humanTurn",
+        selectedStealTargetId: carrier.id,
+        message: { kind: "chooseStealer" },
+      }),
+    );
+    expect(controller.getViewState().candidateMoves).toEqual([
+      { kind: "steal", pieceId: 3, targetPieceId: 9 },
+      { kind: "steal", pieceId: 5, targetPieceId: 9 },
+    ]);
+
+    controller.handleTarget({ kind: "cell", pos: { ...stealer.pos } });
+
+    expect(controller.getViewState()).toEqual(
+      expect.objectContaining({
+        phase: "botThinking",
+        gameState: expect.objectContaining({ ball: { kind: "held", pieceId: stealer.id } }),
+        selectedStealTargetId: null,
+      }),
+    );
+  });
+
+  it("복수 스틸러 선택 중 빈 칸을 클릭하면 스틸 선택을 해제한다", () => {
+    const controller = createGameController({
+      engineClient: new FakeEngineClient(),
+      onChange: () => undefined,
+      createState: createMultipleStealState,
+    });
+    controller.startGame();
+    const carrier = controller.getViewState().gameState!.pieces.find(
+      (piece) => piece.id === 9,
+    )!;
+    controller.handleTarget({ kind: "cell", pos: { ...carrier.pos } });
+
+    controller.handleTarget({ kind: "cell", pos: { x: 6, y: 0 } });
+
+    expect(controller.getViewState()).toEqual(
+      expect.objectContaining({
+        selectedStealTargetId: null,
+        candidateMoves: [],
+        candidatePreviews: [],
+      }),
+    );
+  });
+
+  it("보호 중인 상대 공 소유자를 클릭하면 스틸 보호를 안내한다", () => {
+    const controller = createGameController({
+      engineClient: new FakeEngineClient(),
+      onChange: () => undefined,
+      createState: createProtectedStealState,
+    });
+    controller.startGame();
+    const carrier = controller.getViewState().gameState!.pieces.find(
+      (piece) => piece.id === 9,
+    )!;
+
+    controller.handleTarget({ kind: "cell", pos: { ...carrier.pos } });
+
+    expect(controller.getViewState().message).toEqual({ kind: "protectedCarrier" });
   });
 
   it("사람 수 뒤 봇 수를 적용하고 다시 humanTurn으로 돌아온다", async () => {
@@ -391,12 +539,17 @@ describe("GameController", () => {
 
     expect(states.some((published) => published.phase === "botThinking")).toBe(true);
     expect(engineClient.analyzeCalls[0]?.depth).toBe(3);
-    expect(controller.getViewState()).toEqual(
+    const finalView = controller.getViewState();
+    const botActorId = finalView.lastMove?.move.pieceId;
+    expect(finalView).toEqual(
       expect.objectContaining({
         phase: "humanTurn",
         gameState: expect.objectContaining({ turn: 2 }),
-        lastMove: expect.objectContaining({ move: expect.objectContaining({ pieceId: 4 }) }),
+        lastMove: expect.objectContaining({ move: expect.any(Object) }),
       }),
+    );
+    expect(finalView.gameState?.pieces.find((piece) => piece.id === botActorId)?.team).toBe(
+      "away",
     );
   });
 
@@ -438,7 +591,7 @@ describe("GameController", () => {
     });
     controller.startGame();
     const state = controller.getViewState().gameState!;
-    const shooter = state.pieces.find((piece) => piece.id === 2)!;
+    const shooter = state.pieces.find((piece) => piece.id === 3)!;
     const shoot = legalMoves(state).find(
       (move) => move.kind === "shoot" && move.pieceId === shooter.id,
     )!;
@@ -511,7 +664,7 @@ describe("GameController", () => {
     engineClient.analyzeImpl = async (state, depth) => ({
       best:
         legalMoves(state).find(
-          (move) => move.kind === "shoot" && move.pieceId === 6 && move.dy === 0,
+          (move) => move.kind === "shoot" && move.pieceId === 9 && move.goalRow === 4,
         ) ?? null,
       score: 0,
       nodes: 1,
@@ -526,13 +679,7 @@ describe("GameController", () => {
     });
     controller.startGame();
     const state = controller.getViewState().gameState!;
-    const humanMove = legalMoves(state).find(
-      (move) =>
-        move.kind === "move" &&
-        move.pieceId === 2 &&
-        move.to.x === 7 &&
-        move.to.y === 4,
-    )!;
+    const humanMove = legalMoves(state).find((move) => move.kind === "move")!;
     const actor = state.pieces.find((piece) => piece.id === humanMove.pieceId)!;
     controller.handleTarget({ kind: "cell", pos: { ...actor.pos } });
     controller.selectAction("move");

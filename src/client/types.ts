@@ -5,7 +5,7 @@
  * 화면 단계, 안내 종류처럼 엔진 상태에는 들어갈 필요가 없는 UI 정보만 둔다.
  */
 
-import type { GameState, Move, Pos } from "../engine/types";
+import type { GameState, Move, MovePreview, Pos } from "../engine/types";
 
 /** 사용자가 보고 있는 대국 화면의 생명주기 단계. */
 export type GamePhase =
@@ -28,6 +28,10 @@ export type CanvasTarget =
 export type ClientMessage =
   | { kind: "selectOwn" }
   | { kind: "cannotSteal" }
+  | { kind: "chooseReceiver" }
+  | { kind: "chooseGoal" }
+  | { kind: "chooseStealer" }
+  | { kind: "protectedCarrier" }
   | { kind: "invalidShot" }
   | { kind: "botRetry"; attempt: number; maxAttempts: number }
   | { kind: "fatalError" };
@@ -39,6 +43,12 @@ export interface LastMove {
   target: CanvasTarget;
 }
 
+/** 하나의 합법 수와 그 수를 적용하기 전에 계산한 엔진 판정을 묶은 화면 후보. */
+export interface CandidatePreview {
+  move: Move;
+  preview: MovePreview;
+}
+
 /** Controller가 Renderer에 한 번에 전달하는 전체 화면 상태. */
 export interface ClientViewState {
   phase: GamePhase;
@@ -47,6 +57,9 @@ export interface ClientViewState {
   selectedAction: ClientAction | null;
   availableActions: ClientAction[];
   candidateMoves: Move[];
+  candidatePreviews: CandidatePreview[];
+  /** 복수 스틸러 중 하나를 고르는 동안 선택된 상대 공 소유자 ID. */
+  selectedStealTargetId: number | null;
   lastMove: LastMove | null;
   botAttempt: number;
   message: ClientMessage | null;

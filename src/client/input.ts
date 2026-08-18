@@ -47,8 +47,12 @@ function requirePiece(state: GameState, pieceId: number) {
 
 /** 엔진의 합법 수 하나를 Canvas에서 사용자가 클릭해야 할 대상으로 바꾼다. */
 export function targetForMove(state: GameState, move: Move): CanvasTarget {
-  if (move.kind === "move" || move.kind === "pass") {
+  if (move.kind === "move") {
     return { kind: "cell", pos: { ...move.to } };
+  }
+  if (move.kind === "pass") {
+    const target = requirePiece(state, move.targetPieceId);
+    return { kind: "cell", pos: { ...target.pos } };
   }
   if (move.kind === "steal") {
     const target = requirePiece(state, move.targetPieceId);
@@ -56,12 +60,10 @@ export function targetForMove(state: GameState, move: Move): CanvasTarget {
   }
   if (move.kind === "shoot") {
     const shooter = requirePiece(state, move.pieceId);
-    const goalX = shooter.team === "home" ? BOARD_W : -1;
-    const distanceToGoal = Math.abs(goalX - shooter.pos.x);
     return {
       kind: "goal",
       side: shooter.team === "home" ? "right" : "left",
-      row: shooter.pos.y + move.dy * distanceToGoal,
+      row: move.goalRow,
     };
   }
 

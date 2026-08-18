@@ -9,27 +9,29 @@
  * 셀프플레이가 동일한 규칙을 공유하기 위한 경계다.
  */
 
-import type { GameResult, GameState, Move, Piece, Pos, Team } from "./types";
+import { traceBallPath, type PathStep } from "./ballPath";
+import type { GameResult, GameState, Move, MovePreview, Piece, Pos, Team } from "./types";
 import { BOARD_H, BOARD_W } from "./types";
 
 /**
- * home 팀의 역할별 기본 위치. 배열 인덱스는 `ROLES`와 맞물린다.
+ * home 팀 여섯 기물의 역할과 기본 위치.
  *
- * 0: GK, 1: DF, 2: MF, 3: FW. away 배치는 이 좌표를 보드 중앙 기준으로 상하·좌우
- * 미러링해서 계산한다. 각 좌표는 기물에 할당할 때 spread로 복사해 상수가 경기 중
- * 위치 변경의 영향을 받지 않게 한다.
+ * 같은 역할이 여러 명이므로 역할 배열과 좌표 배열을 따로 두지 않고 한 객체로 묶는다.
+ * away 배치는 이 좌표를 보드 중앙 기준으로 상하·좌우 미러링해서 계산한다.
  */
-const HOME_START: readonly Pos[] = [
-  { x: 0, y: 4 },
-  { x: 2, y: 4 },
-  { x: 4, y: 3 },
-  { x: 4, y: 5 },
+const HOME_START: ReadonlyArray<{ role: Piece["role"]; pos: Pos }> = [
+  { role: "GK", pos: { x: 0, y: 4 } },
+  { role: "DF", pos: { x: 2, y: 2 } },
+  { role: "DF", pos: { x: 2, y: 6 } },
+  { role: "MF", pos: { x: 4, y: 2 } },
+  { role: "MF", pos: { x: 4, y: 6 } },
+  { role: "FW", pos: { x: 5, y: 4 } },
 ];
-/** `HOME_START`와 같은 인덱스를 사용하는 역할 순서. */
-const ROLES: readonly Piece["role"][] = ["GK", "DF", "MF", "FW"];
+/** 한 팀의 기물 수이자 ID에서 팀 내부 배치 인덱스를 구할 때 사용하는 나머지 기준. */
+const PIECES_PER_TEAM = HOME_START.length;
 
-/** 슛 레이가 골라인을 통과할 때 득점으로 인정되는 y 좌표 집합. */
-const GOAL_ROWS = new Set([3, 4, 5]);
+/** 사용자가 직접 선택할 수 있는 상대 골문의 위·가운데·아래 행. */
+const GOAL_ROWS = [3, 4, 5] as const;
 
 /** 한 방향의 패스가 진행할 수 있는 최대 칸 수. */
 const PASS_MAX = 6;
@@ -56,21 +58,6 @@ const DIRS_8: readonly Pos[] = [
   { x: -1, y: 1 },
   { x: -1, y: -1 },
 ];
-/**
- * FW의 나이트 점프 변화량. 한 축으로 2칸, 다른 축으로 1칸 이동하며 중간 기물은
- * 검사하지 않고 목적지의 보드 범위와 점유 여부만 확인한다.
- */
-const KNIGHT: readonly Pos[] = [
-  { x: 1, y: 2 },
-  { x: 2, y: 1 },
-  { x: -1, y: 2 },
-  { x: -2, y: 1 },
-  { x: 1, y: -2 },
-  { x: 2, y: -1 },
-  { x: -1, y: -2 },
-  { x: -2, y: -1 },
-];
-
 /**
  * 좌표가 13×9 보드의 실제 칸 안에 있는지 검사한다.
  *
@@ -129,6 +116,81 @@ function pieceAt(state: GameState, pos: Pos): Piece | undefined {
   return state.pieces.find((piece) => piece.pos.x === pos.x && piece.pos.y === pos.y);
 }
 
+/** 엔진 내부에서 반드시 존재해야 하는 기물을 찾고 잘못된 Move는 즉시 드러낸다. */
+function requirePiece(state: GameState, pieceId: number): Piece {
+  const piece = state.pieces.find((candidate) => candidate.id === pieceId);
+  if (!piece) throw new Error(`존재하지 않는 기물 ID입니다: ${pieceId}`);
+  return piece;
+}
+
+/** 두 논리 좌표가 같은 보드 칸을 가리키는지 검사한다. */
+function samePos(left: Pos, right: Pos): boolean {
+  return left.x === right.x && left.y === right.y;
+}
+
+/**
+ * 공 경로에서 가장 먼저 접촉하는 기물을 찾는다.
+ *
+ * 모서리를 통과하는 한 `PathStep`에는 여러 칸이 동시에 포함될 수 있다. 그 칸들에
+ * 기물이 여럿 있으면 배열 순서와 무관하게 ID가 낮은 기물을 먼저 접촉한 것으로 정해
+ * 같은 상태가 언제나 같은 결과를 내게 한다.
+ */
+function firstPieceOnPath(state: GameState, steps: PathStep[]): Piece | undefined {
+  for (const step of steps) {
+    const hits = state.pieces
+      .filter((piece) => step.cells.some((cell) => samePos(cell, piece.pos)))
+      .sort((left, right) => left.id - right.id);
+    if (hits[0]) return hits[0];
+  }
+  return undefined;
+}
+
+/**
+ * 행동을 적용하지 않고 예상 도착점·공 경로·첫 접촉 결과를 계산한다.
+ *
+ * 화면과 실제 상태 전이가 이 단일 판정을 공유한다. 따라서 차단 경로를 클라이언트나
+ * `applyMove()`가 별도로 다시 계산해서 서로 다른 결과를 만들지 않는다.
+ */
+export function previewMove(state: GameState, move: Move): MovePreview {
+  if (move.kind === "move") {
+    return {
+      kind: "move",
+      destination: { ...move.to },
+      picksUpLooseBall: state.ball.kind === "loose" && samePos(state.ball.pos, move.to),
+    };
+  }
+  if (move.kind === "steal") {
+    return { kind: "steal", targetPieceId: move.targetPieceId, protectedAfter: true };
+  }
+
+  const actor = requirePiece(state, move.pieceId);
+  const target =
+    move.kind === "pass"
+      ? requirePiece(state, move.targetPieceId).pos
+      : { x: actor.team === "home" ? BOARD_W : -1, y: move.goalRow };
+  const steps = traceBallPath(actor.pos, target);
+  const path = steps.flatMap((step) => step.cells.map((cell) => ({ ...cell })));
+  const hit = firstPieceOnPath(state, steps);
+
+  if (move.kind === "pass") {
+    const receiverPieceId = hit?.id ?? move.targetPieceId;
+    return {
+      kind: "pass",
+      path,
+      targetPieceId: move.targetPieceId,
+      receiverPieceId,
+      reachesTarget: receiverPieceId === move.targetPieceId,
+    };
+  }
+  return {
+    kind: "shoot",
+    path,
+    goalRow: move.goalRow,
+    outcome: hit ? "blocked" : "goal",
+    blockerPieceId: hit?.id ?? null,
+  };
+}
+
 /**
  * 좌표가 해당 팀의 골키퍼 박스 형태에 속하는지 검사한다.
  *
@@ -153,8 +215,8 @@ function inGoalkeeperBox(team: Team, pos: Pos): boolean {
  */
 function resetForKickoff(state: GameState, team: Team): void {
   for (const piece of state.pieces) {
-    // ID 0..3과 4..7이 같은 역할 순서를 공유하므로 나머지가 역할 인덱스가 된다.
-    const start = HOME_START[piece.id % 4]!;
+    // 양 팀이 같은 여섯 칸 순서를 공유하므로 나머지가 팀 내부 배치 인덱스가 된다.
+    const start = HOME_START[piece.id % PIECES_PER_TEAM]!.pos;
     piece.pos =
       piece.team === "home"
         // 초기 배치 객체를 기물과 공유하지 않도록 새 좌표로 복사한다.
@@ -174,9 +236,10 @@ function resetForKickoff(state: GameState, team: Team): void {
 /**
  * 새 경기의 완전한 초기 `GameState`를 만든다.
  *
- * home과 away에 GK/DF/MF/FW를 하나씩 생성하고 away 위치는 home 기본 배치를
- * 미러링한다. 임시로 유효한 GameState를 만든 뒤 공통 `resetForKickoff()`를 호출해
- * 최종적으로 home MF가 센터에서 공을 소유하는 0:0 선공 상태를 반환한다.
+ * home과 away에 GK 1명, DF 2명, MF 2명, FW 1명을 생성하고 away 위치는 home
+ * 기본 배치를 미러링한다. 임시로 유효한 GameState를 만든 뒤 공통
+ * `resetForKickoff()`를 호출해 최종적으로 첫 home MF가 센터에서 공을 소유하는
+ * 0:0 선공 상태를 반환한다.
  *
  * 반환할 때마다 새 기물·좌표·점수 객체를 만들므로 서로 다른 경기 상태가 내부 객체를
  * 공유하지 않는다.
@@ -186,17 +249,19 @@ export function createInitialState(): GameState {
 
   // `as const`로 반복 변수 team을 일반 string이 아닌 `"home" | "away"`로 유지한다.
   for (const team of ["home", "away"] as const) {
-    for (let roleIndex = 0; roleIndex < ROLES.length; roleIndex++) {
-      const start = HOME_START[roleIndex]!;
+    for (const start of HOME_START) {
       pieces.push({
-        // 현재 배열 길이를 사용해 home 0..3, away 4..7의 안정적인 ID를 부여한다.
+        // 현재 배열 길이를 사용해 home 0..5, away 6..11의 안정적인 ID를 부여한다.
         id: pieces.length,
         team,
-        role: ROLES[roleIndex]!,
+        role: start.role,
         pos:
           team === "home"
-            ? { ...start }
-            : { x: BOARD_W - 1 - start.x, y: BOARD_H - 1 - start.y },
+            ? { ...start.pos }
+            : {
+                x: BOARD_W - 1 - start.pos.x,
+                y: BOARD_H - 1 - start.pos.y,
+              },
       });
     }
   }
@@ -250,27 +315,13 @@ export function legalMoves(state: GameState): Move[] {
       continue;
     }
 
-    if (piece.role === "FW") {
-      // FW는 체스의 나이트처럼 뛰므로 중간 칸의 기물은 이동을 막지 않는다.
-      for (const direction of KNIGHT) {
-        const to = { x: piece.pos.x + direction.x, y: piece.pos.y + direction.y };
-        if (inBounds(to) && !pieceAt(state, to)) {
-          moves.push({ kind: "move", pieceId: piece.id, to });
-        }
-      }
-      continue;
-    }
-
-    // DF는 직선 4방향, MF는 대각선을 포함한 8방향으로 최대 두 칸 미끄러진다.
-    const directions = piece.role === "DF" ? DIRS_8.slice(0, 4) : DIRS_8;
-    for (const direction of directions) {
-      for (let distance = 1; distance <= 2; distance++) {
-        const to = {
-          x: piece.pos.x + direction.x * distance,
-          y: piece.pos.y + direction.y * distance,
-        };
-        // 미끄러지는 기물은 보드 밖이나 다른 기물을 뛰어넘을 수 없다.
-        if (!inBounds(to) || pieceAt(state, to)) break;
+    // DF·MF·FW는 역할과 관계없이 8방향의 인접한 빈 칸으로 한 칸 이동한다.
+    for (const direction of DIRS_8) {
+      const to = {
+        x: piece.pos.x + direction.x,
+        y: piece.pos.y + direction.y,
+      };
+      if (inBounds(to) && !pieceAt(state, to)) {
         moves.push({ kind: "move", pieceId: piece.id, to });
       }
     }
@@ -278,43 +329,23 @@ export function legalMoves(state: GameState): Move[] {
 
   // 패스와 슛은 현재 차례의 팀이 공을 실제로 보유할 때만 선택할 수 있다.
   if (carrier?.team === team) {
-    for (const direction of DIRS_8) {
-      // 해당 방향에서 아무 기물도 만나지 않았을 때 공이 도달할 마지막 빈 칸이다.
-      let lastEmpty: Pos | undefined;
-      let contacted = false;
-      for (let distance = 1; distance <= PASS_MAX; distance++) {
-        const to = {
-          x: carrier.pos.x + direction.x * distance,
-          y: carrier.pos.y + direction.y * distance,
-        };
-        if (!inBounds(to)) break;
-        const hit = pieceAt(state, to);
-        if (hit) {
-          // 가장 먼저 만난 아군에게만 패스할 수 있다. 상대 기물은 패스 길을 막는다.
-          if (hit.team === team) {
-            moves.push({ kind: "pass", pieceId: carrier.id, to: { ...to } });
-          }
-          contacted = true;
-          break;
-        }
-        lastEmpty = to;
-      }
-      // 제한 거리 안에 기물이 전혀 없다면 마지막 빈 칸으로 loose 패스를 보낼 수 있다.
-      if (!contacted && lastEmpty) {
-        moves.push({ kind: "pass", pieceId: carrier.id, to: lastEmpty });
+    // 경로가 막혔더라도 거리 안의 아군은 직접 선택할 수 있고 실제 수신자는 preview가 정한다.
+    for (const target of state.pieces) {
+      if (target.team !== team || target.id === carrier.id) continue;
+      const distance = Math.max(
+        Math.abs(target.pos.x - carrier.pos.x),
+        Math.abs(target.pos.y - carrier.pos.y),
+      );
+      if (distance <= PASS_MAX) {
+        moves.push({ kind: "pass", pieceId: carrier.id, targetPieceId: target.id });
       }
     }
 
     const goalX = team === "home" ? BOARD_W : -1;
     const distanceToGoal = Math.abs(goalX - carrier.pos.x);
     if (distanceToGoal <= SHOT_MAX) {
-      // dy는 슛 궤적의 세로 변화량이다: -1은 위 대각선, 0은 직선, 1은 아래 대각선.
-      for (const dy of [-1, 0, 1] as const) {
-        const exitY = carrier.pos.y + dy * distanceToGoal;
-        // 골라인을 통과하는 y가 골대의 세 행 중 하나일 때만 유효한 슛이다.
-        if (GOAL_ROWS.has(exitY)) {
-          moves.push({ kind: "shoot", pieceId: carrier.id, dy });
-        }
+      for (const goalRow of GOAL_ROWS) {
+        moves.push({ kind: "shoot", pieceId: carrier.id, goalRow });
       }
     }
   }
@@ -322,9 +353,11 @@ export function legalMoves(state: GameState): Move[] {
   // 스틸은 상대가 공을 들고 있고 보호 턴이 끝난 경우에만 후보가 될 수 있다.
   if (carrier && carrier.team !== team && state.noSteal === 0) {
     for (const piece of state.pieces) {
-      // 맨해튼 거리 1은 대각선을 제외한 상하좌우 한 칸 인접을 뜻한다.
-      const distance =
-        Math.abs(piece.pos.x - carrier.pos.x) + Math.abs(piece.pos.y - carrier.pos.y);
+      // 두 축 차이 중 큰 값이 1이면 상하좌우와 대각선을 포함한 주변 8칸이다.
+      const distance = Math.max(
+        Math.abs(piece.pos.x - carrier.pos.x),
+        Math.abs(piece.pos.y - carrier.pos.y),
+      );
       if (piece.team === team && distance === 1) {
         moves.push({
           kind: "steal",
@@ -367,6 +400,7 @@ function cloneState(state: GameState): GameState {
 export function applyMove(state: GameState, move: Move): GameState {
   const next = cloneState(state);
   const team = sideToMove(next);
+  const preview = previewMove(next, move);
   // 직전 스틸이나 선방으로 생긴 보호 턴은 한 차례가 적용될 때마다 소모된다.
   next.noSteal = Math.max(0, next.noSteal - 1);
 
@@ -385,29 +419,13 @@ export function applyMove(state: GameState, move: Move): GameState {
       next.ball = { kind: "held", pieceId: piece.id };
     }
   } else if (move.kind === "pass") {
-    // 기물이 있는 목적지는 소유권 이전, 빈 목적지는 좌표를 가진 loose 공이 된다.
-    const receiver = pieceAt(next, move.to);
-    next.ball = receiver
-      ? { kind: "held", pieceId: receiver.id }
-      : { kind: "loose", pos: { ...move.to } };
+    if (preview.kind !== "pass") throw new Error("패스 미리보기 종류가 일치하지 않습니다.");
+    next.ball = { kind: "held", pieceId: preview.receiverPieceId };
   } else if (move.kind === "shoot") {
-    const shooter = next.pieces.find((piece) => piece.id === move.pieceId)!;
-    const directionX = team === "home" ? 1 : -1;
-    const goalX = team === "home" ? BOARD_W : -1;
-    const distanceToGoal = Math.abs(goalX - shooter.pos.x);
-    let saver: Piece | undefined;
-    // 슈터 다음 칸부터 골라인 직전까지 궤적을 훑어 가장 먼저 만난 기물을 찾는다.
-    for (let distance = 1; distance < distanceToGoal; distance++) {
-      saver = pieceAt(next, {
-        x: shooter.pos.x + directionX * distance,
-        y: shooter.pos.y + move.dy * distance,
-      });
-      if (saver) break;
-    }
-
-    if (saver) {
+    if (preview.kind !== "shoot") throw new Error("슛 미리보기 종류가 일치하지 않습니다.");
+    if (preview.outcome === "blocked") {
       // 궤적 위 첫 기물이 팀과 역할에 관계없이 공을 확보하고 즉시 스틸로부터 보호받는다.
-      next.ball = { kind: "held", pieceId: saver.id };
+      next.ball = { kind: "held", pieceId: preview.blockerPieceId! };
       next.noSteal = 1;
     } else {
       // 아무도 막지 못하면 득점하고 상대 팀이 센터에서 공을 갖도록 재배치한다.

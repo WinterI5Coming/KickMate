@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createInitialState, legalMoves } from "../engine/rules";
+import { createInitialState, legalMoves, previewMove } from "../engine/rules";
 import { buildPresentation, createRenderer, type RenderRefs } from "./render";
 import { targetForMove } from "./input";
 import type { ClientViewState } from "./types";
@@ -11,6 +11,8 @@ const readyState: ClientViewState = {
   selectedAction: null,
   availableActions: [],
   candidateMoves: [],
+  candidatePreviews: [],
+  selectedStealTargetId: null,
   lastMove: null,
   botAttempt: 0,
   message: null,
@@ -40,40 +42,83 @@ class RecordingContext {
   fillStyle: string | CanvasGradient | CanvasPattern = "";
   strokeStyle: string | CanvasGradient | CanvasPattern = "";
   lineWidth = 1;
+  globalAlpha = 1;
   font = "";
   textAlign: CanvasTextAlign = "start";
   textBaseline: CanvasTextBaseline = "alphabetic";
   readonly fillRects: Array<[number, number, number, number]> = [];
   readonly texts: string[] = [];
+  readonly fillTextRecords: Array<{ text: string; x: number; y: number; color: string }> = [];
   readonly arcs: Array<[number, number, number]> = [];
   readonly strokes: Array<[number, number, number]> = [];
+  readonly circleStrokes: Array<{
+    x: number;
+    y: number;
+    radius: number;
+    color: string;
+    width: number;
+  }> = [];
+  readonly lines: Array<{
+    from: [number, number];
+    to: [number, number];
+    color: string;
+    width: number;
+  }> = [];
   strokeCalls = 0;
   private currentArc: [number, number, number] | null = null;
+  private currentFrom: [number, number] | null = null;
+  private currentTo: [number, number] | null = null;
 
   fillRect(x: number, y: number, width: number, height: number): void {
     this.fillRects.push([x, y, width, height]);
   }
 
   strokeRect(): void {}
-  beginPath(): void {}
+  beginPath(): void {
+    this.currentArc = null;
+    this.currentFrom = null;
+    this.currentTo = null;
+  }
   fill(): void {}
   stroke(): void {
     this.strokeCalls += 1;
-    if (this.currentArc) this.strokes.push(this.currentArc);
+    if (this.currentArc) {
+      this.strokes.push(this.currentArc);
+      this.circleStrokes.push({
+        x: this.currentArc[0],
+        y: this.currentArc[1],
+        radius: this.currentArc[2],
+        color: String(this.strokeStyle),
+        width: this.lineWidth,
+      });
+    }
+    if (this.currentFrom && this.currentTo) {
+      this.lines.push({
+        from: this.currentFrom,
+        to: this.currentTo,
+        color: String(this.strokeStyle),
+        width: this.lineWidth,
+      });
+    }
   }
-  moveTo(): void {}
-  lineTo(): void {}
+  moveTo(x: number, y: number): void {
+    this.currentFrom = [x, y];
+  }
+  lineTo(x: number, y: number): void {
+    this.currentTo = [x, y];
+  }
   save(): void {}
   restore(): void {}
-  setLineDash(): void {}
+  setLineDash(_segments: number[]): void {}
 
   arc(x: number, y: number, radius: number): void {
     this.arcs.push([x, y, radius]);
     this.currentArc = [x, y, radius];
   }
 
-  fillText(text: string): void {
+  fillText(text: string, x = 0, y = 0): void {
     this.texts.push(text);
+    this.fillTextRecords.push({ text, x, y, color: String(this.fillStyle) });
   }
 }
 
@@ -230,6 +275,19 @@ describe("buildPresentation", () => {
     [{ kind: "selectOwn" }, "먼저 내 기물을 선택하세요."],
     [{ kind: "cannotSteal" }, "이 기물은 스틸할 수 없습니다."],
     [{ kind: "invalidShot" }, "선택한 방향으로 슛할 수 없습니다."],
+    [
+      { kind: "chooseReceiver" },
+      "패스할 아군을 선택하세요. ! 경로는 다른 선수가 먼저 받습니다.",
+    ],
+    [
+      { kind: "chooseGoal" },
+      "골문의 위·가운데·아래를 선택하세요. ! 경로는 수비에게 막힙니다.",
+    ],
+    [{ kind: "chooseStealer" }, "공을 빼앗을 내 선수를 선택하세요."],
+    [
+      { kind: "protectedCarrier" },
+      "◆ 보호 중인 공 소유자는 이번 차례에 스틸할 수 없습니다.",
+    ],
   ] as const)("입력 안내 메시지 %o를 문구로 표시한다", (message, expected) => {
     const presentation = buildPresentation({ ...humanState, message });
 
@@ -260,15 +318,18 @@ describe("createRenderer", () => {
     expect(buttons.shoot.hidden).toBe(true);
   });
 
-  it("경기 상태가 있으면 경기장과 여덟 기물 역할 및 공을 Canvas에 그린다", () => {
+  it("경기 상태가 있으면 경기장과 열두 기물 역할 및 공을 Canvas에 그린다", () => {
     const { refs, context } = createRenderRefs();
     const render = createRenderer(refs);
 
     render(humanState);
 
     expect(context.fillRects).toContainEqual([0, 0, 1200, 720]);
-    expect(context.texts).toEqual(["GK", "DF", "MF", "FW", "GK", "DF", "MF", "FW"]);
-    expect(context.arcs.length).toBeGreaterThanOrEqual(9);
+    expect(context.texts).toEqual([
+      "GK", "DF", "DF", "MF", "MF", "FW",
+      "GK", "DF", "DF", "MF", "MF", "FW",
+    ]);
+    expect(context.arcs.length).toBeGreaterThanOrEqual(13);
   });
 
   it("직전 수, 행동 후보와 선택 기물을 현재 프레임에 함께 표시한다", () => {
@@ -292,20 +353,19 @@ describe("createRenderer", () => {
       },
     });
 
-    expect(context.arcs).toHaveLength(11);
+    expect(context.arcs).toHaveLength(15);
     expect(context.strokeCalls).toBe(2);
   });
 
   it("아군 기물에 연결되는 패스 후보는 기물 밖에서도 보이는 테두리로 표시한다", () => {
     const { refs, context } = createRenderRefs();
     const gameState = createInitialState();
-    const passer = gameState.pieces.find((piece) => piece.id === 2)!;
+    const passer = gameState.pieces.find((piece) => piece.id === 3)!;
     const pass = legalMoves(gameState).find(
       (move) =>
         move.kind === "pass" &&
         move.pieceId === passer.id &&
-        move.to.x === 2 &&
-        move.to.y === 4,
+        move.targetPieceId === 5,
     )!;
     const render = createRenderer(refs);
 
@@ -318,6 +378,128 @@ describe("createRenderer", () => {
       candidateMoves: [pass],
     });
 
-    expect(context.strokes).toContainEqual([280, 360, 32]);
+    expect(context.strokes).toContainEqual([520, 360, 32]);
+  });
+
+  it("성공 패스 경로는 초록 선과 ✓를 그리고 실제 수신자를 이중 강조한다", () => {
+    const { refs, context } = createRenderRefs();
+    const gameState = createInitialState();
+    const pass = legalMoves(gameState).find(
+      (move) => move.kind === "pass" && move.pieceId === 3 && move.targetPieceId === 5,
+    )!;
+    const preview = previewMove(gameState, pass);
+    const render = createRenderer(refs);
+
+    render({
+      ...humanState,
+      gameState,
+      selectedPieceId: 3,
+      selectedAction: "pass",
+      availableActions: ["pass"],
+      candidateMoves: [pass],
+      candidatePreviews: [{ move: pass, preview }],
+    });
+
+    expect(context.texts).toContain("✓");
+    expect(context.texts.indexOf("✓")).toBeGreaterThan(context.texts.lastIndexOf("FW"));
+    expect(context.lines).toContainEqual({
+      from: [600, 360],
+      to: [520, 360],
+      color: "#39d98a",
+      width: 5,
+    });
+    expect(
+      context.circleStrokes.filter(
+        (stroke) => stroke.x === 520 && stroke.y === 360 && stroke.color === "#f6c453",
+      ),
+    ).toHaveLength(2);
+    expect(context.globalAlpha).toBe(1);
+  });
+
+  it("차단 슛은 빨간 선과 !를 그리고 실제 차단자를 이중 강조한다", () => {
+    const { refs, context } = createRenderRefs();
+    const gameState = createInitialState();
+    gameState.pieces.find((piece) => piece.id === 3)!.pos = { x: 9, y: 2 };
+    gameState.pieces.find((piece) => piece.id === 7)!.pos = { x: 11, y: 3 };
+    gameState.pieces.find((piece) => piece.id === 8)!.pos = { x: 10, y: 7 };
+    gameState.ball = { kind: "held", pieceId: 3 };
+    const shoot = legalMoves(gameState).find(
+      (move) => move.kind === "shoot" && move.pieceId === 3 && move.goalRow === 4,
+    )!;
+    const preview = previewMove(gameState, shoot);
+    const render = createRenderer(refs);
+
+    render({
+      ...humanState,
+      gameState,
+      selectedPieceId: 3,
+      selectedAction: "shoot",
+      availableActions: ["shoot"],
+      candidateMoves: [shoot],
+      candidatePreviews: [{ move: shoot, preview }],
+    });
+
+    expect(context.texts).toContain("!");
+    expect(context.lines).toContainEqual({
+      from: [840, 200],
+      to: [1000, 280],
+      color: "#ff5c5c",
+      width: 5,
+    });
+    expect(
+      context.circleStrokes.filter(
+        (stroke) => stroke.x === 1000 && stroke.y === 280 && stroke.color === "#f6c453",
+      ),
+    ).toHaveLength(2);
+    expect(context.globalAlpha).toBe(1);
+  });
+
+  it("스틸 보호 중인 공 소유자 위에 보라색 ◆를 표시한다", () => {
+    const { refs, context } = createRenderRefs();
+    const gameState = createInitialState();
+    gameState.noSteal = 1;
+    const render = createRenderer(refs);
+
+    render({ ...humanState, gameState });
+
+    expect(context.fillTextRecords).toContainEqual({
+      text: "◆",
+      x: 600,
+      y: 336,
+      color: "#d8b4fe",
+    });
+  });
+
+  it("복수 스틸러 선택 중에는 상대 공 소유자가 아니라 후보 home 기물을 강조한다", () => {
+    const { refs, context } = createRenderRefs();
+    const gameState = createInitialState();
+    gameState.pieces.find((piece) => piece.id === 3)!.pos = { x: 7, y: 4 };
+    gameState.pieces.find((piece) => piece.id === 5)!.pos = { x: 7, y: 6 };
+    gameState.pieces.find((piece) => piece.id === 9)!.pos = { x: 8, y: 5 };
+    gameState.ball = { kind: "held", pieceId: 9 };
+    const steals = legalMoves(gameState).filter(
+      (move) => move.kind === "steal" && move.targetPieceId === 9,
+    );
+    const render = createRenderer(refs);
+
+    render({
+      ...humanState,
+      gameState,
+      candidateMoves: steals,
+      candidatePreviews: steals.map((move) => ({ move, preview: previewMove(gameState, move) })),
+      selectedStealTargetId: 9,
+    });
+
+    expect(context.circleStrokes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ x: 680, y: 360, color: "#ff4d6d" }),
+        expect.objectContaining({ x: 680, y: 520, color: "#ff4d6d" }),
+      ]),
+    );
+    expect(
+      context.circleStrokes.some(
+        (stroke) => stroke.x === 760 && stroke.y === 440 && stroke.color === "#ff4d6d",
+      ),
+    ).toBe(false);
   });
 });

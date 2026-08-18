@@ -6,7 +6,13 @@
  * 결정한다.
  */
 
-import { applyMove, createInitialState, gameResult, legalMoves } from "../engine/rules";
+import {
+  applyMove,
+  createInitialState,
+  gameResult,
+  legalMoves,
+  previewMove,
+} from "../engine/rules";
 import type { GameState, Move } from "../engine/types";
 import type { EngineClient } from "./engineClient";
 import { moveMatchesTarget, targetForMove } from "./input";
@@ -47,6 +53,8 @@ export function createGameController(options: GameControllerOptions): GameContro
   let selectedAction: ClientAction | null = null;
   let availableActions: ClientAction[] = [];
   let candidateMoves: ClientViewState["candidateMoves"] = [];
+  let candidatePreviews: ClientViewState["candidatePreviews"] = [];
+  let selectedStealTargetId: number | null = null;
   let lastMove: ClientViewState["lastMove"] = null;
   let botAttempt = 0;
   let message: ClientViewState["message"] = null;
@@ -61,6 +69,8 @@ export function createGameController(options: GameControllerOptions): GameContro
       selectedAction,
       availableActions: [...availableActions],
       candidateMoves: [...candidateMoves],
+      candidatePreviews: [...candidatePreviews],
+      selectedStealTargetId,
       lastMove,
       botAttempt,
       message,
@@ -71,6 +81,14 @@ export function createGameController(options: GameControllerOptions): GameContro
     options.onChange(snapshot());
   }
 
+  /** 합법 수와 동일한 시점의 엔진 미리보기를 항상 한 쌍으로 교체한다. */
+  function setCandidates(moves: Move[]): void {
+    candidateMoves = moves;
+    candidatePreviews = gameState
+      ? moves.map((move) => ({ move, preview: previewMove(gameState!, move) }))
+      : [];
+  }
+
   function beginNewGame(): void {
     gameEpoch += 1;
     phase = "humanTurn";
@@ -78,7 +96,8 @@ export function createGameController(options: GameControllerOptions): GameContro
     selectedPieceId = null;
     selectedAction = null;
     availableActions = [];
-    candidateMoves = [];
+    setCandidates([]);
+    selectedStealTargetId = null;
     lastMove = null;
     botAttempt = 0;
     message = null;
@@ -91,10 +110,11 @@ export function createGameController(options: GameControllerOptions): GameContro
 
     selectedPieceId = pieceId;
     selectedAction = null;
+    selectedStealTargetId = null;
     availableActions = (["move", "pass", "shoot"] as const).filter((action) =>
       pieceMoves.some((move) => move.kind === action),
     );
-    candidateMoves = pieceMoves.filter((move) => move.kind === "steal");
+    setCandidates([]);
     message = null;
     publish();
   }
@@ -102,8 +122,9 @@ export function createGameController(options: GameControllerOptions): GameContro
   function clearSelection(): void {
     selectedPieceId = null;
     selectedAction = null;
+    selectedStealTargetId = null;
     availableActions = [];
-    candidateMoves = [];
+    setCandidates([]);
     message = null;
     publish();
   }
@@ -125,8 +146,9 @@ export function createGameController(options: GameControllerOptions): GameContro
     gameState = applyTrackedMove(move);
     selectedPieceId = null;
     selectedAction = null;
+    selectedStealTargetId = null;
     availableActions = [];
-    candidateMoves = [];
+    setCandidates([]);
     message = null;
     phase = gameResult(gameState) === null ? "botThinking" : "finished";
     publish();
@@ -201,20 +223,38 @@ export function createGameController(options: GameControllerOptions): GameContro
         (move) => move.pieceId === selectedPieceId,
       );
       selectedAction = action;
-      candidateMoves = pieceMoves.filter(
-        (move) => move.kind === "steal" || move.kind === selectedAction,
-      );
-      message = null;
+      selectedStealTargetId = null;
+      setCandidates(pieceMoves.filter((move) => move.kind === selectedAction));
+      message =
+        action === "pass"
+          ? { kind: "chooseReceiver" }
+          : action === "shoot"
+            ? { kind: "chooseGoal" }
+            : null;
       publish();
     },
     handleTarget(target) {
       if (phase !== "humanTurn" || !gameState) return;
 
-      const steal = candidateMoves.find(
-        (move) => move.kind === "steal" && moveMatchesTarget(gameState!, move, target),
-      );
-      if (steal) {
-        applyHumanMove(steal);
+      if (selectedStealTargetId !== null) {
+        const steal = candidateMoves.find(
+          (move) =>
+            move.kind === "steal" &&
+            target.kind === "cell" &&
+            gameState!.pieces.some(
+              (piece) =>
+                piece.id === move.pieceId &&
+                piece.pos.x === target.pos.x &&
+                piece.pos.y === target.pos.y,
+            ),
+        );
+        if (steal) {
+          applyHumanMove(steal);
+          return;
+        }
+        if (target.kind === "outside" || target.kind === "cell") {
+          clearSelection();
+        }
         return;
       }
 
@@ -245,6 +285,31 @@ export function createGameController(options: GameControllerOptions): GameContro
         return;
       }
       if (piece.team === "away") {
+        const isCarrier =
+          gameState.ball.kind === "held" && gameState.ball.pieceId === piece.id;
+        if (isCarrier) {
+          const steals = legalMoves(gameState).filter(
+            (move): move is Extract<Move, { kind: "steal" }> =>
+              move.kind === "steal" && move.targetPieceId === piece.id,
+          );
+          if (steals.length === 1) {
+            applyHumanMove(steals[0]!);
+          } else if (steals.length > 1) {
+            selectedPieceId = null;
+            selectedAction = null;
+            selectedStealTargetId = piece.id;
+            availableActions = [];
+            setCandidates(steals);
+            message = { kind: "chooseStealer" };
+            publish();
+          } else {
+            message = {
+              kind: gameState.noSteal > 0 ? "protectedCarrier" : "cannotSteal",
+            };
+            publish();
+          }
+          return;
+        }
         if (selectedPieceId === null) {
           message = { kind: "selectOwn" };
           publish();

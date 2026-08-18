@@ -22,6 +22,10 @@ const BOARD_COLORS = [
   "shootTarget",
   "stealTarget",
   "lastMove",
+  "pathSuccess",
+  "pathBlocked",
+  "actualReceiver",
+  "protected",
 ] as const;
 const MATCH_STRINGS = [
   "goal",
@@ -42,6 +46,10 @@ const MATCH_STRINGS = [
   "draw",
   "selectOwn",
   "cannotSteal",
+  "chooseReceiver",
+  "chooseGoal",
+  "chooseStealer",
+  "protectedCarrier",
   "invalidShot",
   "fatalError",
 ] as const;

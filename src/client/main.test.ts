@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { legalMoves } from "../engine/rules";
+import { createInitialState, legalMoves, previewMove } from "../engine/rules";
 import type { WorkerRequest, WorkerResponse } from "../worker/protocol";
 
 class FakeElement {
@@ -30,6 +30,7 @@ class FakeContext {
   fillStyle: string | CanvasGradient | CanvasPattern = "";
   strokeStyle: string | CanvasGradient | CanvasPattern = "";
   lineWidth = 1;
+  globalAlpha = 1;
   font = "";
   textAlign: CanvasTextAlign = "start";
   textBaseline: CanvasTextBaseline = "alphabetic";
@@ -41,6 +42,7 @@ class FakeContext {
   stroke(): void {}
   moveTo(): void {}
   lineTo(): void {}
+  setLineDash(_segments: number[]): void {}
   fillText(): void {}
 }
 
@@ -132,8 +134,16 @@ afterEach(() => {
 });
 
 describe("브라우저 진입점", () => {
-  it("시작·기물 선택·이동·봇 응답을 Controller와 Renderer로 왕복시킨다", async () => {
+  it("직접 지정 패스와 봇 응답을 Controller·Renderer·Worker로 왕복시킨다", async () => {
     const { elements } = installBrowserFakes();
+    const initial = createInitialState();
+    const pass = legalMoves(initial).find(
+      (move) => move.kind === "pass" && move.pieceId === 3 && move.targetPieceId === 5,
+    );
+    if (!pass) throw new Error("킥오프 상태에서 FW를 목표로 한 패스를 찾지 못했습니다.");
+    const passPreview = previewMove(initial, pass);
+    if (passPreview.kind !== "pass") throw new Error("패스 미리보기 생성에 실패했습니다.");
+    expect(passPreview.receiverPieceId).toBe(5);
 
     await import("./main");
 
@@ -144,14 +154,23 @@ describe("브라우저 진입점", () => {
     expect(elements["status-message"].textContent).toBe("내 차례입니다.");
     expect(elements["start-game"].hidden).toBe(true);
 
-    elements.board.dispatch("click", { clientX: 120, clientY: 360 });
-    expect(elements["action-move"].hidden).toBe(false);
-    elements["action-move"].dispatch("click");
-    elements.board.dispatch("click", { clientX: 200, clientY: 360 });
+    // 킥오프 공 소유자(MF, 6·4)를 고르고 패스 모드에 들어간다.
+    elements.board.dispatch("click", { clientX: 600, clientY: 360 });
+    expect(elements["action-pass"].hidden).toBe(false);
+    elements["action-pass"].dispatch("click");
+    expect(elements["status-message"].textContent).toContain("패스할 아군");
+
+    // 목표 아군(FW, 5·4)을 직접 클릭한다.
+    elements.board.dispatch("click", { clientX: 520, clientY: 360 });
 
     expect(elements["status-message"].textContent).toBe("봇이 생각 중입니다.");
     const worker = FakeWorker.instances[0]!;
     const request = worker.sent[0] as Extract<WorkerRequest, { type: "analyze" }>;
+    expect(request.state.turn).toBe(1);
+    expect(request.state.ball).toEqual({
+      kind: "held",
+      pieceId: passPreview.receiverPieceId,
+    });
     const best = legalMoves(request.state)[0]!;
     worker.emit({
       type: "analysis",

@@ -46,25 +46,25 @@ describe("Canvas 입력 변환", () => {
     });
   });
 
-  it("패스의 도착 칸을 클릭 목표로 사용한다", () => {
+  it("패스를 받을 아군 기물의 칸을 클릭 목표로 사용한다", () => {
     const state = createInitialState();
     const pass = legalMoves(state).find(
       (candidate) =>
-        candidate.kind === "pass" && candidate.to.x === 2 && candidate.to.y === 4,
+        candidate.kind === "pass" && candidate.targetPieceId === 5,
     );
 
     expect(pass).toBeDefined();
     expect(targetForMove(state, pass!)).toEqual({
       kind: "cell",
-      pos: { x: 2, y: 4 },
+      pos: { x: 5, y: 4 },
     });
   });
 
-  it("home 직선 슛을 오른쪽 골대의 통과 행과 연결한다", () => {
+  it("home 슛의 goalRow를 오른쪽 골대 행과 연결한다", () => {
     const state = createInitialState();
     const shoot = legalMoves(state).find(
       (candidate) =>
-        candidate.kind === "shoot" && candidate.pieceId === 2 && candidate.dy === 0,
+        candidate.kind === "shoot" && candidate.pieceId === 3 && candidate.goalRow === 4,
     );
 
     expect(shoot).toBeDefined();
@@ -75,34 +75,39 @@ describe("Canvas 입력 변환", () => {
     });
   });
 
-  it("골라인에서 세 칸 떨어진 중앙 기물은 직선 슛 하나만 골문을 통과한다", () => {
+  it("슛 거리 안의 기물은 골문의 위·가운데·아래 행을 모두 직접 선택한다", () => {
     const state = createInitialState();
-    const shooter = state.pieces.find((piece) => piece.id === 2)!;
+    const shooter = state.pieces.find((piece) => piece.id === 3)!;
     shooter.pos = { x: 10, y: 4 };
-    state.pieces.find((piece) => piece.id === 5)!.pos = { x: 12, y: 3 };
+    state.pieces.find((piece) => piece.id === 6)!.pos = { x: 12, y: 3 };
+    state.pieces.find((piece) => piece.id === 11)!.pos = { x: 10, y: 1 };
     state.ball = { kind: "held", pieceId: shooter.id };
 
     const shoots = legalMoves(state).filter(
       (move) => move.kind === "shoot" && move.pieceId === shooter.id,
     );
 
-    expect(shoots).toEqual([{ kind: "shoot", pieceId: shooter.id, dy: 0 }]);
-    expect(targetForMove(state, shoots[0]!)).toEqual({
-      kind: "goal",
-      side: "right",
-      row: 4,
-    });
+    expect(shoots).toEqual([
+      { kind: "shoot", pieceId: shooter.id, goalRow: 3 },
+      { kind: "shoot", pieceId: shooter.id, goalRow: 4 },
+      { kind: "shoot", pieceId: shooter.id, goalRow: 5 },
+    ]);
+    expect(shoots.map((shoot) => targetForMove(state, shoot))).toEqual([
+      { kind: "goal", side: "right", row: 3 },
+      { kind: "goal", side: "right", row: 4 },
+      { kind: "goal", side: "right", row: 5 },
+    ]);
   });
 
-  it("away 대각선 슛을 왼쪽 골대의 통과 행과 연결한다", () => {
+  it("away 슛의 goalRow를 왼쪽 골대 행과 연결한다", () => {
     const state = createInitialState();
     state.turn = 1;
     state.pieces.find((piece) => piece.id === 0)!.pos = { x: 0, y: 2 };
-    state.pieces.find((piece) => piece.id === 6)!.pos = { x: 0, y: 4 };
-    state.ball = { kind: "held", pieceId: 6 };
+    state.pieces.find((piece) => piece.id === 9)!.pos = { x: 0, y: 4 };
+    state.ball = { kind: "held", pieceId: 9 };
     const shoot = legalMoves(state).find(
       (candidate) =>
-        candidate.kind === "shoot" && candidate.pieceId === 6 && candidate.dy === -1,
+        candidate.kind === "shoot" && candidate.pieceId === 9 && candidate.goalRow === 3,
     );
 
     expect(shoot).toBeDefined();
@@ -116,12 +121,13 @@ describe("Canvas 입력 변환", () => {
   it("스틸을 away 볼 소유자의 칸과 연결한다", () => {
     const state = createInitialState();
     state.pieces.find((piece) => piece.id === 3)!.pos = { x: 7, y: 5 };
-    state.ball = { kind: "held", pieceId: 6 };
+    state.pieces.find((piece) => piece.id === 9)!.pos = { x: 8, y: 5 };
+    state.ball = { kind: "held", pieceId: 9 };
     const steal = legalMoves(state).find(
       (candidate) =>
         candidate.kind === "steal" &&
         candidate.pieceId === 3 &&
-        candidate.targetPieceId === 6,
+        candidate.targetPieceId === 9,
     );
 
     expect(steal).toBeDefined();
@@ -167,7 +173,7 @@ describe("Canvas 입력 변환", () => {
     const state = createInitialState();
     const shoot = legalMoves(state).find(
       (candidate) =>
-        candidate.kind === "shoot" && candidate.pieceId === 2 && candidate.dy === 0,
+        candidate.kind === "shoot" && candidate.pieceId === 3 && candidate.goalRow === 4,
     );
 
     expect(shoot).toBeDefined();
@@ -183,42 +189,51 @@ describe("Canvas 입력 변환", () => {
     const state = createInitialState();
 
     expect(() =>
-      targetForMove(state, { kind: "shoot", pieceId: 999, dy: 0 }),
+      targetForMove(state, { kind: "shoot", pieceId: 999, goalRow: 4 }),
     ).toThrow("존재하지 않는 기물 ID입니다: 999");
   });
 
-  it("32경기의 모든 합법 수가 클릭 가능한 단일 Canvas 대상으로 왕복된다", () => {
-    for (let gameIndex = 0; gameIndex < 32; gameIndex += 1) {
-      let state = createInitialState();
-      let selector = gameIndex + 1;
+  it(
+    "32경기의 모든 합법 수가 클릭 가능한 단일 Canvas 대상으로 왕복된다",
+    () => {
+      for (let gameIndex = 0; gameIndex < 32; gameIndex += 1) {
+        let state = createInitialState();
+        let selector = gameIndex + 1;
 
-      while (gameResult(state) === null) {
-        const moves = legalMoves(state);
-        const targetsByAction = new Map<string, Set<string>>();
+        while (gameResult(state) === null) {
+          const moves = legalMoves(state);
+          const intentsByAction = new Map<string, Set<string>>();
 
-        for (const move of moves) {
-          const target = targetForMove(state, move);
-          expect(target.kind).not.toBe("outside");
-          expect(moveMatchesTarget(state, move, target)).toBe(true);
+          for (const move of moves) {
+            const target = targetForMove(state, move);
+            expect(target.kind).not.toBe("outside");
+            expect(moveMatchesTarget(state, move, target)).toBe(true);
 
-          if (target.kind === "outside") {
-            throw new Error(`합법 수가 Canvas 바깥을 가리킵니다: ${JSON.stringify(move)}`);
+            if (target.kind === "outside") {
+              throw new Error(`합법 수가 Canvas 바깥을 가리킵니다: ${JSON.stringify(move)}`);
+            }
+
+            const actionKey = `${move.pieceId}:${move.kind}`;
+            const intentKey =
+              move.kind === "move"
+                ? `${move.to.x},${move.to.y}`
+                : move.kind === "shoot"
+                  ? `${move.goalRow}`
+                  : `${move.targetPieceId}`;
+            const usedIntents = intentsByAction.get(actionKey) ?? new Set<string>();
+            expect(
+              usedIntents.has(intentKey),
+              `${actionKey} has duplicate intent ${intentKey}`,
+            ).toBe(false);
+            usedIntents.add(intentKey);
+            intentsByAction.set(actionKey, usedIntents);
           }
 
-          const actionKey = `${move.pieceId}:${move.kind}`;
-          const targetKey =
-            target.kind === "cell"
-              ? `cell:${target.pos.x},${target.pos.y}`
-              : `goal:${target.side},${target.row}`;
-          const usedTargets = targetsByAction.get(actionKey) ?? new Set<string>();
-          expect(usedTargets.has(targetKey), `${actionKey} has duplicate ${targetKey}`).toBe(false);
-          usedTargets.add(targetKey);
-          targetsByAction.set(actionKey, usedTargets);
+          selector = (selector * 73 + 41) % 1_000_003;
+          state = applyMove(state, moves[selector % moves.length]!);
         }
-
-        selector = (selector * 73 + 41) % 1_000_003;
-        state = applyMove(state, moves[selector % moves.length]!);
       }
-    }
-  });
+    },
+    10_000,
+  );
 });

@@ -2,6 +2,8 @@
 
 이 문서는 KickMate 코드베이스를 처음 읽는 사람이 전체 구조와 의존 방향을 먼저 이해할 수 있도록 설명한다. 구현 완료 여부와 다음 작업은 [current-state.md](./current-state.md)에서 관리한다.
 
+> 현재 본문은 배포된 4대4 런타임 구조를 설명한다. 다음 변경으로 승인된 6대6 규칙과 엔진 계약은 [핵심 경기 규칙 개편 설계](./superpowers/specs/2026-08-19-core-gameplay-redesign-design.md)를 따르며, 구현 전까지 현재 코드의 사실과 구분한다.
+
 ## 한 문장으로 보는 구조
 
 KickMate는 하나의 순수 게임 엔진을 브라우저 화면, Web Worker, 퍼즐 검산, 셀프플레이가 함께 사용하는 구조다.
@@ -62,7 +64,7 @@ index.html
 
 클라이언트는 엔진의 공개 함수와 타입을 사용할 수 있지만 게임 규칙을 다시 구현하면 안 된다.
 
-S2에서 확정한 클라이언트 분리는 다음과 같다. 현재 코드에는 아직 모두 구현되지 않았으며 실제 진행 상태는 [current-state.md](./current-state.md)를 따른다.
+S2에서 확정한 다음 클라이언트 분리는 현재 구현돼 있다. 이후 규칙 개편도 이 책임 경계를 유지하며 실제 진행 상태는 [current-state.md](./current-state.md)를 따른다.
 
 ```text
 main.ts
@@ -135,7 +137,7 @@ interface GameState {
 
 - `turn`: 지금까지 진행된 ply. 짝수는 home, 홀수는 away 차례다.
 - `maxTurns`: 최대 ply 수다.
-- `pieces`: 8개 기물의 팀, 역할, 좌표다.
+- `pieces`: 현재 4대4 런타임에서는 8개 기물의 팀, 역할, 좌표다. 승인된 다음 규칙에서는 12개로 늘어난다.
 - `ball`: 특정 기물이 소유하거나 보드 위 루즈볼로 존재한다.
 - `noSteal`: 선방·스틸 직후 재스틸을 막는 보호 카운터다.
 - `score`: 양 팀 득점이다.
@@ -148,6 +150,20 @@ pass   패스
 shoot  슛
 steal  스틸
 ```
+
+### 승인된 다음 엔진 계약 `[구현 전]`
+
+6대6 개편에서는 사용자의 의도를 좌표 기울기가 아니라 대상 자체로 표현한다.
+
+```ts
+type Move =
+  | { kind: "move"; pieceId: number; to: Pos }
+  | { kind: "pass"; pieceId: number; targetPieceId: number }
+  | { kind: "shoot"; pieceId: number; goalRow: 3 | 4 | 5 }
+  | { kind: "steal"; pieceId: number; targetPieceId: number };
+```
+
+엔진은 패스와 슛이 지나가는 공통 선분 경로를 계산하고 `previewMove(state, move)`로 실제 수신자·차단자·득점 여부를 상태 전이 전에 제공한다. `applyMove()`는 같은 내부 판정을 재사용해야 하며, 클라이언트는 경로 또는 차단 규칙을 복제하지 않고 엔진의 미리보기 결과만 표현한다.
 
 ## 상태 전이 흐름
 

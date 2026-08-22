@@ -2,6 +2,11 @@
   "$comment": "게임의 색. 자유롭게 바꾸고 npm run dev로 확인 — 여기는 비개발자 존입니다.",
   "board": {
     "grass": "#2d6a3f",
+    "grassLight": "#2f7a46",
+    "grassDark": "#28683b",
+    "stadium": "#101509",
+    "chalk": "#eaf5ec",
+    "net": "#cfd8cf",
     "line": "#3f7d51",
     "ball": "#f5f0e6",
     "pieceText": "#ffffff",

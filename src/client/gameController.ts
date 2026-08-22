@@ -10,6 +10,7 @@ import {
   applyMove,
   createInitialState,
   gameResult,
+  isPressured,
   isStealProtected,
   legalMoves,
   previewMove,
@@ -19,10 +20,12 @@ import {
 import type { GameState, Move } from "../engine/types";
 import type { EngineClient } from "./engineClient";
 import { isTargetedMove, moveMatchesTarget, targetForMove } from "./input";
-import type { CanvasTarget, ClientAction, ClientViewState } from "./types";
+import type { CanvasTarget, ClientAction, ClientViewState, MatchEvent } from "./types";
 
 const BOT_DEPTH = 3;
 const MAX_BOT_ATTEMPTS = 3;
+/** 이벤트 로그에 보존하는 최대 사건 수. */
+const EVENT_LIMIT = 30;
 
 /** DOM 이벤트 연결 계층이 사용할 경기 제어 API. */
 export interface GameController {
@@ -63,6 +66,7 @@ export function createGameController(options: GameControllerOptions): GameContro
   let candidatePreviews: ClientViewState["candidatePreviews"] = [];
   let selectedStealTargetId: number | null = null;
   let lastMove: ClientViewState["lastMove"] = null;
+  let events: MatchEvent[] = [];
   let botAttempt = 0;
   let message: ClientViewState["message"] = null;
   let gameEpoch = 0;
@@ -96,6 +100,7 @@ export function createGameController(options: GameControllerOptions): GameContro
       candidatePreviews: [...candidatePreviews],
       selectedStealTargetId,
       threatShots: computeThreatShots(),
+      events: [...events],
       lastMove,
       botAttempt,
       message,
@@ -124,6 +129,7 @@ export function createGameController(options: GameControllerOptions): GameContro
     setCandidates([]);
     selectedStealTargetId = null;
     lastMove = null;
+    events = [];
     botAttempt = 0;
     message = null;
     publish();
@@ -142,7 +148,17 @@ export function createGameController(options: GameControllerOptions): GameContro
       pieceMoves.some((move) => move.kind === action),
     );
     setCandidates([]);
-    message = null;
+    // 클릭이 왜 행동으로 이어지지 않는지 이유를 함께 안내한다.
+    const usedActions = gameState.actionCountByPiece[pieceId] ?? 0;
+    const isCarrier = gameState.ball.kind === "held" && gameState.ball.pieceId === pieceId;
+    message =
+      pieceMoves.length === 0 && usedActions >= 2
+        ? { kind: "exhaustedPiece" }
+        : isCarrier &&
+            isPressured(gameState, pieceId) &&
+            !pieceMoves.some((move) => move.kind === "move")
+          ? { kind: "pressuredCarrier" }
+          : null;
     publish();
   }
 
@@ -156,11 +172,53 @@ export function createGameController(options: GameControllerOptions): GameContro
     publish();
   }
 
+  /** 공 관련 사건만 골라 실행 전 확률과 실제 결과를 이벤트 로그에 남긴다. */
+  function recordEvent(before: GameState, move: Move, after: GameState): void {
+    const team = sideToMove(before);
+    let event: MatchEvent | null = null;
+
+    if (move.kind === "steal") {
+      event = { team, kind: "steal" };
+    } else if (move.kind === "hold") {
+      event = { team, kind: "hold" };
+    } else if (move.kind === "pass" || move.kind === "shoot") {
+      const preview = previewMove(before, move);
+      const carrier =
+        after.ball.kind === "held"
+          ? after.pieces.find(
+              (piece) => after.ball.kind === "held" && piece.id === after.ball.pieceId,
+            )
+          : undefined;
+      if (preview.kind === "pass") {
+        event = {
+          team,
+          kind: carrier && carrier.team !== team ? "passIntercepted" : "pass",
+          chancePercent: Math.round(preview.arrivalChance * 100),
+        };
+      } else if (preview.kind === "shoot") {
+        event = {
+          team,
+          kind:
+            after.score[team] > before.score[team]
+              ? "shotGoal"
+              : carrier?.role === "GK"
+                ? "shotSaved"
+                : "shotBlocked",
+          chancePercent: Math.round(preview.goalChance * 100),
+        };
+      }
+    }
+
+    if (event) events = [...events.slice(-(EVENT_LIMIT - 1)), event];
+  }
+
   function applyTrackedMove(move: Move): GameState {
     if (!gameState) throw new Error("진행 중인 경기가 없습니다.");
     if (!isTargetedMove(move)) {
       lastMove = null;
-      return applyMove(gameState, move);
+      const next = applyMove(gameState, move);
+      recordEvent(gameState, move, next);
+      return next;
     }
     const actor = gameState.pieces.find((piece) => piece.id === move.pieceId);
     if (!actor) throw new Error(`존재하지 않는 기물 ID입니다: ${move.pieceId}`);
@@ -170,7 +228,9 @@ export function createGameController(options: GameControllerOptions): GameContro
       from: { ...actor.pos },
       target: targetForMove(gameState, move),
     };
-    return applyMove(gameState, move);
+    const next = applyMove(gameState, move);
+    recordEvent(gameState, move, next);
+    return next;
   }
 
   function applyHumanMove(move: Move): void {

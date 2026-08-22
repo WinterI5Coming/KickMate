@@ -48,12 +48,14 @@ const refs: RenderRefs = {
   holdButton: requireElement<HTMLButtonElement>("#action-hold"),
   endTurnButton: requireElement<HTMLButtonElement>("#end-turn"),
   actionButtons,
+  eventLog: requireElement<HTMLElement>("#event-log"),
 };
 
 document.title = strings.app.title;
 
 // Controller의 상태 변경 알림이 곧 한 번의 화면 갱신이 되도록 연결한다.
-const render = createRenderer(refs);
+// 실제 브라우저에서는 직전 수(이동·패스·슛·득점)를 짧은 애니메이션으로 연출한다.
+const render = createRenderer(refs, { animate: true });
 const engineClient = createEngineClient({ timeoutMs: 5_000 });
 const controller = createGameController({ engineClient, onChange: render });
 

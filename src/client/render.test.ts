@@ -16,6 +16,7 @@ const readyState: ClientViewState = {
   candidatePreviews: [],
   selectedStealTargetId: null,
   threatShots: [],
+  events: [],
   lastMove: null,
   botAttempt: 0,
   message: null,
@@ -167,6 +168,7 @@ function createRenderRefs(): {
         pass: buttons.pass as unknown as HTMLButtonElement,
         shoot: buttons.shoot as unknown as HTMLButtonElement,
       },
+      eventLog: new FakeElement() as HTMLElement,
     },
   };
 }
@@ -389,8 +391,23 @@ describe("createRenderer", () => {
       },
     });
 
-    expect(context.arcs).toHaveLength(16);
-    expect(context.strokeCalls).toBe(3);
+    // 직전 수 선(라스트무브 색), 선택 테두리, 압박 테두리, 이동 후보 점이 한 프레임에 함께 나타난다.
+    const target = targetForMove(gameState, move);
+    if (target.kind !== "cell") throw new Error("이동 후보는 칸 대상이어야 합니다.");
+    const from = { x: 80 + actor.pos.x * 80 + 40, y: actor.pos.y * 80 + 40 };
+    const to = { x: 80 + target.pos.x * 80 + 40, y: target.pos.y * 80 + 40 };
+    expect(context.lines).toContainEqual({
+      from: [from.x, from.y],
+      to: [to.x, to.y],
+      color: "#bdb2ff",
+      width: 7,
+    });
+    expect(
+      context.circleStrokes.filter(
+        (stroke) => stroke.x === from.x && stroke.y === from.y && stroke.color === "#ffd166",
+      ),
+    ).toHaveLength(1);
+    expect(context.arcs).toContainEqual([to.x, to.y, 80 * 0.13]);
   });
 
   it("아군 기물에 연결되는 패스 후보는 기물 밖에서도 보이는 테두리로 표시한다", () => {
@@ -601,5 +618,36 @@ describe("createRenderer", () => {
         (stroke) => stroke.x === 760 && stroke.y === 440 && stroke.color === "#ff4d6d",
       ),
     ).toBe(false);
+  });
+});
+
+describe("이벤트 로그 문구", () => {
+  it("사건 종류와 확률을 로그 한 줄 문구로 조립한다", () => {
+    const presentation = buildPresentation({
+      ...readyState,
+      events: [
+        { team: "home", kind: "pass", chancePercent: 100 },
+        { team: "away", kind: "shotSaved", chancePercent: 35 },
+        { team: "home", kind: "steal" },
+      ],
+    });
+
+    expect(presentation.eventLines).toEqual([
+      "HOME 패스 100% → 연결",
+      "AWAY 슛 35% → 선방!",
+      "HOME 스틸!",
+    ]);
+  });
+
+  it("최근 여섯 사건만 표시한다", () => {
+    const presentation = buildPresentation({
+      ...readyState,
+      events: Array.from({ length: 9 }, (_, index) => ({
+        team: index % 2 === 0 ? ("home" as const) : ("away" as const),
+        kind: "steal" as const,
+      })),
+    });
+
+    expect(presentation.eventLines).toHaveLength(6);
   });
 });

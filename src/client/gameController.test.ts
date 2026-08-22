@@ -1113,3 +1113,68 @@ describe("슛 위협 미리보기", () => {
     expect(controller.getViewState().threatShots).toEqual([]);
   });
 });
+
+describe("규칙 안내 메시지와 이벤트 로그", () => {
+  it("압박 중인 공 소유자를 선택하면 버티기 안내를 보여준다", () => {
+    const controller = createGameController({
+      engineClient: new FakeEngineClient(),
+      onChange: () => undefined,
+    });
+    controller.startGame();
+    // 초기 킥오프 소유자(6,4)는 상대 FW(7,4)와 인접해 압박 상태다.
+    controller.handleTarget({ kind: "cell", pos: { x: 6, y: 4 } });
+
+    expect(controller.getViewState().message).toEqual({ kind: "pressuredCarrier" });
+  });
+
+  it("행동을 모두 쓴 선수를 선택하면 소진 안내를 보여준다", () => {
+    const controller = createGameController({
+      engineClient: new FakeEngineClient(),
+      onChange: () => undefined,
+      createState: () => {
+        const state = createInitialState();
+        state.actionCountByPiece = { 0: 2 };
+        return state;
+      },
+    });
+    controller.startGame();
+
+    controller.handleTarget({ kind: "cell", pos: { x: 0, y: 4 } });
+
+    expect(controller.getViewState().message).toEqual({ kind: "exhaustedPiece" });
+  });
+
+  it("패스와 스틸을 확률과 함께 이벤트 로그에 남긴다", () => {
+    const controller = createGameController({
+      engineClient: new FakeEngineClient(),
+      onChange: () => undefined,
+    });
+    controller.startGame();
+    // 킥오프 소유자(3)가 FW(5)에게 패스한다.
+    controller.handleTarget({ kind: "cell", pos: { x: 6, y: 4 } });
+    controller.selectAction("pass");
+    controller.handleTarget({ kind: "cell", pos: { x: 5, y: 4 } });
+
+    const events = controller.getViewState().events;
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ team: "home", kind: "pass" });
+    expect(events[0]!.chancePercent).toBeGreaterThan(0);
+    expect(events[0]!.chancePercent).toBeLessThanOrEqual(100);
+  });
+
+  it("새 게임을 시작하면 이벤트 로그를 비운다", () => {
+    const controller = createGameController({
+      engineClient: new FakeEngineClient(),
+      onChange: () => undefined,
+    });
+    controller.startGame();
+    controller.handleTarget({ kind: "cell", pos: { x: 6, y: 4 } });
+    controller.selectAction("pass");
+    controller.handleTarget({ kind: "cell", pos: { x: 5, y: 4 } });
+    expect(controller.getViewState().events).toHaveLength(1);
+
+    controller.restartGame();
+
+    expect(controller.getViewState().events).toEqual([]);
+  });
+});

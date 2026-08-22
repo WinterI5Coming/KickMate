@@ -7,69 +7,215 @@
     <style>
       * { box-sizing: border-box; }
       [hidden] { display: none !important; }
+      :root {
+        --home: #1f5fbf;
+        --away: #c03434;
+        --chalk: #eaf5ec;
+        --gold: #ffd166;
+        --panel: rgba(16, 21, 9, 0.82);
+        --panel-line: rgba(234, 245, 236, 0.14);
+      }
       body {
         margin: 0;
         min-height: 100vh;
-        padding: 24px;
-        color: #f5f0e6;
-        background: #1a1f16;
-        font-family: system-ui, sans-serif;
+        padding: 20px 24px 32px;
+        color: var(--chalk);
+        background:
+          radial-gradient(1200px 500px at 50% -10%, #2b4a2555, transparent 70%),
+          linear-gradient(180deg, #131a0e 0%, #0c110a 60%, #090d08 100%);
+        font-family: "Segoe UI", system-ui, sans-serif;
       }
       #app {
         display: grid;
-        gap: 16px;
+        gap: 14px;
         width: min(1200px, 100%);
         margin: 0 auto;
+      }
+      h1.brand {
+        margin: 0;
+        text-align: center;
+        font-size: 1.35rem;
+        font-weight: 800;
+        letter-spacing: 0.35em;
+        text-transform: uppercase;
+        color: var(--gold);
+        text-shadow: 0 2px 12px #00000088;
+      }
+      h1.brand small {
+        display: block;
+        margin-top: 2px;
+        font-size: 0.62rem;
+        font-weight: 500;
+        letter-spacing: 0.28em;
+        color: var(--chalk);
+        opacity: 0.55;
       }
       #match-info {
         display: flex;
         flex-wrap: wrap;
+        align-items: center;
         justify-content: center;
-        gap: 12px 32px;
-        font-size: 1.1rem;
+        gap: 10px 22px;
+        padding: 10px 20px;
+        border: 1px solid var(--panel-line);
+        border-radius: 14px;
+        background: var(--panel);
+        box-shadow: 0 10px 30px #00000066;
+        font-size: 1.05rem;
+      }
+      #match-info .team {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+      }
+      #match-info .team::before {
+        content: "";
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        box-shadow: 0 0 0 2px #00000055 inset, 0 0 10px currentColor;
+      }
+      #match-info .team.home { color: #7fb2ff; }
+      #match-info .team.home::before { background: var(--home); }
+      #match-info .team.away { color: #ff9d9d; }
+      #match-info .team.away::before { background: var(--away); }
+      #match-info strong {
+        min-width: 1.4em;
+        text-align: center;
+        font-size: 1.7rem;
+        font-weight: 800;
+        color: var(--chalk);
+        text-shadow: 0 2px 8px #000000aa;
+      }
+      #match-info .vs {
+        font-size: 0.8rem;
+        font-weight: 700;
+        letter-spacing: 0.2em;
+        opacity: 0.45;
+      }
+      #turn-info {
+        padding: 4px 14px;
+        border: 1px solid var(--panel-line);
+        border-radius: 999px;
+        background: #00000044;
+        font-size: 0.86rem;
+        letter-spacing: 0.02em;
+        opacity: 0.9;
       }
       #status-message {
-        min-height: 1.5em;
+        min-height: 1.6em;
         margin: 0;
         text-align: center;
+        font-size: 1.02rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        color: var(--gold);
+        text-shadow: 0 1px 6px #00000099;
+      }
+      .pitch-frame {
+        padding: 10px;
+        border: 1px solid var(--panel-line);
+        border-radius: 18px;
+        background: linear-gradient(180deg, #1a2413, #10160c);
+        box-shadow: 0 18px 50px #000000aa, 0 0 0 1px #00000066;
       }
       canvas {
         display: block;
         width: 100%;
         height: auto;
-        border: 1px solid #3f7d51;
+        border-radius: 10px;
       }
       #actions {
         display: flex;
         flex-wrap: wrap;
         justify-content: center;
-        gap: 8px;
+        gap: 10px;
       }
       button {
-        min-width: 96px;
-        padding: 10px 16px;
-        border: 1px solid #f5f0e6;
-        border-radius: 6px;
-        color: #f5f0e6;
-        background: #293325;
+        min-width: 104px;
+        padding: 11px 20px;
+        border: 1px solid var(--panel-line);
+        border-radius: 999px;
+        color: var(--chalk);
+        background: linear-gradient(180deg, #2c3a24, #202b1a);
         font: inherit;
+        font-weight: 700;
+        letter-spacing: 0.06em;
         cursor: pointer;
+        box-shadow: 0 4px 14px #00000066;
+        transition: transform 0.08s ease, box-shadow 0.08s ease, filter 0.08s ease;
       }
-      button[aria-pressed="true"] { outline: 3px solid currentColor; }
-      button:disabled { cursor: not-allowed; opacity: 0.55; }
+      button:hover:not(:disabled) {
+        transform: translateY(-1px);
+        filter: brightness(1.15);
+        box-shadow: 0 7px 18px #00000088;
+      }
+      button:active:not(:disabled) { transform: translateY(0); }
+      button[aria-pressed="true"] {
+        border-color: var(--gold);
+        color: var(--gold);
+        box-shadow: 0 0 0 2px #ffd16644, 0 4px 14px #00000066;
+      }
+      button:disabled { cursor: not-allowed; opacity: 0.45; }
+      #action-shoot { border-color: #ffb70366; }
+      #action-hold {
+        border-color: #4dd0e166;
+        animation: hold-pulse 1.2s ease-in-out infinite;
+      }
+      @keyframes hold-pulse {
+        0%, 100% { box-shadow: 0 4px 14px #00000066; }
+        50% { box-shadow: 0 0 0 4px #4dd0e144, 0 4px 14px #00000066; }
+      }
+      #event-log {
+        margin: 0 auto;
+        padding: 10px 18px;
+        width: min(560px, 100%);
+        border: 1px solid var(--panel-line);
+        border-radius: 12px;
+        background: var(--panel);
+        font-size: 0.84rem;
+        line-height: 1.7;
+        letter-spacing: 0.02em;
+        white-space: pre-line;
+        opacity: 0.88;
+      }
+      #end-turn { border-color: #ff5c5c55; }
       #start-game,
-      #new-game { justify-self: center; }
+      #new-game {
+        justify-self: center;
+        min-width: 200px;
+        padding: 14px 34px;
+        border-color: var(--gold);
+        color: #131a0e;
+        background: linear-gradient(180deg, #ffd166, #f0b93e);
+        font-size: 1.06rem;
+        letter-spacing: 0.12em;
+      }
+      footer.hint {
+        margin: 0;
+        text-align: center;
+        font-size: 0.78rem;
+        letter-spacing: 0.03em;
+        opacity: 0.45;
+      }
     </style>
   </head>
   <body>
     <main id="app">
+      <h1 class="brand">KickMate<small>3행동 턴제 축구</small></h1>
       <section id="match-info" aria-live="polite">
-        <span>HOME <strong id="score-home">0</strong></span>
-        <span>AWAY <strong id="score-away">0</strong></span>
+        <span class="team home">HOME <strong id="score-home">0</strong></span>
+        <span class="vs">VS</span>
+        <span class="team away"><strong id="score-away">0</strong> AWAY</span>
         <span id="turn-info">0 / 60 ply</span>
       </section>
       <p id="status-message" role="status">게임을 시작하세요.</p>
-      <canvas id="board" width="1200" height="720" aria-label="KickMate 경기장"></canvas>
+      <div class="pitch-frame">
+        <canvas id="board" width="1200" height="720" aria-label="KickMate 경기장"></canvas>
+      </div>
+      <section id="event-log" aria-label="경기 기록" aria-live="polite" hidden></section>
       <section id="actions" aria-label="기물 행동">
         <button id="action-move" type="button" hidden>이동</button>
         <button id="action-pass" type="button" hidden>패스</button>
@@ -79,6 +225,7 @@
       </section>
       <button id="start-game" type="button">게임 시작</button>
       <button id="new-game" type="button" hidden>새 게임</button>
+      <footer class="hint">내 기물 클릭 → 행동 선택 · 상대 공 소유자 클릭 = 스틸 · 분홍 레인 = 상대 슛 위협</footer>
     </main>
     <script type="module" src="/src/client/main.ts"></script>
   </body>

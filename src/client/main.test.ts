@@ -108,6 +108,7 @@ function installBrowserFakes() {
     "action-shoot": new FakeElement(),
     "action-hold": new FakeElement(),
     "end-turn": new FakeElement(),
+    "event-log": new FakeElement(),
   };
   const bySelector = new Map(
     Object.entries(elements).map(([id, element]) => [`#${id}`, element]),

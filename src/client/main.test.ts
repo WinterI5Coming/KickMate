@@ -106,6 +106,8 @@ function installBrowserFakes() {
     "action-move": new FakeElement(),
     "action-pass": new FakeElement(),
     "action-shoot": new FakeElement(),
+    "action-hold": new FakeElement(),
+    "end-turn": new FakeElement(),
   };
   const bySelector = new Map(
     Object.entries(elements).map(([id, element]) => [`#${id}`, element]),
@@ -134,7 +136,7 @@ afterEach(() => {
 });
 
 describe("브라우저 진입점", () => {
-  it("직접 지정 패스와 봇 응답을 Controller·Renderer·Worker로 왕복시킨다", async () => {
+  it("직접 지정 패스와 조기 종료 뒤 봇의 전체 팀 턴을 왕복시킨다", async () => {
     const { elements } = installBrowserFakes();
     const initial = createInitialState();
     const pass = legalMoves(initial).find(
@@ -163,23 +165,33 @@ describe("브라우저 진입점", () => {
     // 목표 아군(FW, 5·4)을 직접 클릭한다.
     elements.board.dispatch("click", { clientX: 520, clientY: 360 });
 
-    expect(elements["status-message"].textContent).toBe("봇이 생각 중입니다.");
     const worker = FakeWorker.instances[0]!;
+    expect(elements["status-message"].textContent).toBe("내 차례입니다.");
+    expect(elements["turn-info"].textContent).toContain("HOME 2/3");
+    expect(worker.sent).toHaveLength(0);
+
+    elements["end-turn"].dispatch("click");
+    expect(elements["status-message"].textContent).toBe("봇이 생각 중입니다.");
+    expect(worker.sent).toHaveLength(1);
+
     const request = worker.sent[0] as Extract<WorkerRequest, { type: "analyze" }>;
     expect(request.state.turn).toBe(1);
     expect(request.state.ball).toEqual({
       kind: "held",
       pieceId: passPreview.receiverPieceId,
     });
-    const best = legalMoves(request.state)[0]!;
-    worker.emit({
-      type: "analysis",
-      requestId: request.requestId,
-      result: { best, score: 0, nodes: 1, depth: 3, ms: 0, values: [] },
-    });
-    await flushPromises();
+    for (let index = 0; index < 3; index += 1) {
+      const current = worker.sent[index] as Extract<WorkerRequest, { type: "analyze" }>;
+      const best = legalMoves(current.state).find((move) => move.kind === "move")!;
+      worker.emit({
+        type: "analysis",
+        requestId: current.requestId,
+        result: { best, score: 0, nodes: 1, depth: 3, ms: 0, values: [] },
+      });
+      await flushPromises();
+    }
 
     expect(elements["status-message"].textContent).toBe("내 차례입니다.");
-    expect(elements["turn-info"].textContent).toBe("2 / 60 ply");
+    expect(elements["turn-info"].textContent).toBe("4 / 60 행동 · HOME 3/3");
   });
 });

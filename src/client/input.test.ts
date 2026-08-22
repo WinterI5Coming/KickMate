@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { applyMove, createInitialState, gameResult, legalMoves } from "../engine/rules";
-import { canvasPointToTarget, moveMatchesTarget, targetForMove } from "./input";
+import type { Move } from "../engine/types";
+import {
+  canvasPointToTarget,
+  isTargetedMove,
+  moveMatchesTarget,
+  targetForMove,
+  type TargetedMove,
+} from "./input";
+
+function requireTargeted(move: Move | undefined): TargetedMove {
+  if (!move || !isTargetedMove(move)) throw new Error("targeted Move를 찾지 못했습니다.");
+  return move;
+}
 
 describe("Canvas 입력 변환", () => {
   it("경기장 왼쪽 위 내부 픽셀을 첫 번째 보드 칸으로 바꾼다", () => {
@@ -40,7 +52,7 @@ describe("Canvas 입력 변환", () => {
     );
 
     expect(move).toBeDefined();
-    expect(targetForMove(state, move!)).toEqual({
+    expect(targetForMove(state, requireTargeted(move))).toEqual({
       kind: "cell",
       pos: { x: 1, y: 4 },
     });
@@ -54,7 +66,7 @@ describe("Canvas 입력 변환", () => {
     );
 
     expect(pass).toBeDefined();
-    expect(targetForMove(state, pass!)).toEqual({
+    expect(targetForMove(state, requireTargeted(pass))).toEqual({
       kind: "cell",
       pos: { x: 5, y: 4 },
     });
@@ -68,7 +80,7 @@ describe("Canvas 입력 변환", () => {
     );
 
     expect(shoot).toBeDefined();
-    expect(targetForMove(state, shoot!)).toEqual({
+    expect(targetForMove(state, requireTargeted(shoot))).toEqual({
       kind: "goal",
       side: "right",
       row: 4,
@@ -92,7 +104,7 @@ describe("Canvas 입력 변환", () => {
       { kind: "shoot", pieceId: shooter.id, goalRow: 4 },
       { kind: "shoot", pieceId: shooter.id, goalRow: 5 },
     ]);
-    expect(shoots.map((shoot) => targetForMove(state, shoot))).toEqual([
+    expect(shoots.map((shoot) => targetForMove(state, requireTargeted(shoot)))).toEqual([
       { kind: "goal", side: "right", row: 3 },
       { kind: "goal", side: "right", row: 4 },
       { kind: "goal", side: "right", row: 5 },
@@ -102,6 +114,7 @@ describe("Canvas 입력 변환", () => {
   it("away 슛의 goalRow를 왼쪽 골대 행과 연결한다", () => {
     const state = createInitialState();
     state.turn = 1;
+    state.activeTeam = "away";
     state.pieces.find((piece) => piece.id === 0)!.pos = { x: 0, y: 2 };
     state.pieces.find((piece) => piece.id === 9)!.pos = { x: 0, y: 4 };
     state.ball = { kind: "held", pieceId: 9 };
@@ -111,7 +124,7 @@ describe("Canvas 입력 변환", () => {
     );
 
     expect(shoot).toBeDefined();
-    expect(targetForMove(state, shoot!)).toEqual({
+    expect(targetForMove(state, requireTargeted(shoot))).toEqual({
       kind: "goal",
       side: "left",
       row: 3,
@@ -131,7 +144,7 @@ describe("Canvas 입력 변환", () => {
     );
 
     expect(steal).toBeDefined();
-    expect(targetForMove(state, steal!)).toEqual({
+    expect(targetForMove(state, requireTargeted(steal))).toEqual({
       kind: "cell",
       pos: { x: 8, y: 5 },
     });
@@ -149,7 +162,7 @@ describe("Canvas 입력 변환", () => {
 
     expect(move).toBeDefined();
     expect(
-      moveMatchesTarget(state, move!, { kind: "cell", pos: { x: 1, y: 4 } }),
+      moveMatchesTarget(state, requireTargeted(move), { kind: "cell", pos: { x: 1, y: 4 } }),
     ).toBe(true);
   });
 
@@ -165,7 +178,7 @@ describe("Canvas 입력 변환", () => {
 
     expect(move).toBeDefined();
     expect(
-      moveMatchesTarget(state, move!, { kind: "cell", pos: { x: 1, y: 5 } }),
+      moveMatchesTarget(state, requireTargeted(move), { kind: "cell", pos: { x: 1, y: 5 } }),
     ).toBe(false);
   });
 
@@ -178,10 +191,10 @@ describe("Canvas 입력 변환", () => {
 
     expect(shoot).toBeDefined();
     expect(
-      moveMatchesTarget(state, shoot!, { kind: "goal", side: "right", row: 4 }),
+      moveMatchesTarget(state, requireTargeted(shoot), { kind: "goal", side: "right", row: 4 }),
     ).toBe(true);
     expect(
-      moveMatchesTarget(state, shoot!, { kind: "goal", side: "right", row: 3 }),
+      moveMatchesTarget(state, requireTargeted(shoot), { kind: "goal", side: "right", row: 3 }),
     ).toBe(false);
   });
 
@@ -194,7 +207,7 @@ describe("Canvas 입력 변환", () => {
   });
 
   it(
-    "32경기의 모든 합법 수가 클릭 가능한 단일 Canvas 대상으로 왕복된다",
+    "32경기의 targeted 합법 수가 클릭 가능한 단일 Canvas 대상으로 왕복된다",
     () => {
       for (let gameIndex = 0; gameIndex < 32; gameIndex += 1) {
         let state = createInitialState();
@@ -205,6 +218,7 @@ describe("Canvas 입력 변환", () => {
           const intentsByAction = new Map<string, Set<string>>();
 
           for (const move of moves) {
+            if (!isTargetedMove(move)) continue;
             const target = targetForMove(state, move);
             expect(target.kind).not.toBe("outside");
             expect(moveMatchesTarget(state, move, target)).toBe(true);
@@ -219,7 +233,7 @@ describe("Canvas 입력 변환", () => {
                 ? `${move.to.x},${move.to.y}`
                 : move.kind === "shoot"
                   ? `${move.goalRow}`
-                  : `${move.targetPieceId}`;
+                : `${move.targetPieceId}`;
             const usedIntents = intentsByAction.get(actionKey) ?? new Set<string>();
             expect(
               usedIntents.has(intentKey),
@@ -236,4 +250,12 @@ describe("Canvas 입력 변환", () => {
     },
     10_000,
   );
+
+  it("버티기와 턴 종료는 Canvas 대상이 아닌 직접 버튼 행동으로 분류한다", () => {
+    expect(isTargetedMove({ kind: "hold", pieceId: 3 })).toBe(false);
+    expect(isTargetedMove({ kind: "endTurn" })).toBe(false);
+    expect(
+      isTargetedMove({ kind: "move", pieceId: 3, to: { x: 6, y: 3 } }),
+    ).toBe(true);
+  });
 });

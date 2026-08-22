@@ -14,7 +14,11 @@
     "pathSuccess": "#39d98a",
     "pathBlocked": "#ff5c5c",
     "actualReceiver": "#f6c453",
-    "protected": "#d8b4fe"
+    "protected": "#d8b4fe",
+    "pressured": "#ff9f43",
+    "heldFirm": "#4dd0e1",
+    "rebound": "#ffd166",
+    "threat": "#ff8fa3"
   },
   "team": {
     "home": "#1f5fbf",

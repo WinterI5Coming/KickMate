@@ -1,6 +1,14 @@
 import { BOARD_H, BOARD_W, type GameState, type Move } from "../engine/types";
 import type { CanvasTarget } from "./types";
 
+/** Canvas 위치를 직접 선택해 실행하는 행동. */
+export type TargetedMove = Exclude<Move, { kind: "hold" } | { kind: "endTurn" }>;
+
+/** 버튼 전용 행동을 Canvas 대상 행동에서 제외한다. */
+export function isTargetedMove(move: Move): move is TargetedMove {
+  return move.kind !== "hold" && move.kind !== "endTurn";
+}
+
 /**
  * Canvas 안에서 보드와 양쪽 골대가 차지하는 고정 픽셀 배치.
  *
@@ -46,7 +54,7 @@ function requirePiece(state: GameState, pieceId: number) {
 }
 
 /** 엔진의 합법 수 하나를 Canvas에서 사용자가 클릭해야 할 대상으로 바꾼다. */
-export function targetForMove(state: GameState, move: Move): CanvasTarget {
+export function targetForMove(state: GameState, move: TargetedMove): CanvasTarget {
   if (move.kind === "move") {
     return { kind: "cell", pos: { ...move.to } };
   }
@@ -74,7 +82,7 @@ export function targetForMove(state: GameState, move: Move): CanvasTarget {
 /** Canvas 대상이 특정 Move를 실행하기 위해 클릭할 위치인지 판정한다. */
 export function moveMatchesTarget(
   state: GameState,
-  move: Move,
+  move: TargetedMove,
   target: CanvasTarget,
 ): boolean {
   const expected = targetForMove(state, move);

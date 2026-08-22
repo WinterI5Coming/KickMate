@@ -53,6 +53,10 @@ export interface CandidatePreview {
 export interface ClientViewState {
   phase: GamePhase;
   gameState: GameState | null;
+  /** 현재 상태에서 압박받은 공 소유자가 버티기를 실행할 수 있는지 여부. */
+  canHold: boolean;
+  /** 현재 팀이 한 행동 이상 수행해 턴을 조기 종료할 수 있는지 여부. */
+  canEndTurn: boolean;
   selectedPieceId: number | null;
   selectedAction: ClientAction | null;
   availableActions: ClientAction[];
@@ -60,6 +64,8 @@ export interface ClientViewState {
   candidatePreviews: CandidatePreview[];
   /** 복수 스틸러 중 하나를 고르는 동안 선택된 상대 공 소유자 ID. */
   selectedStealTargetId: number | null;
+  /** 사람 턴에 상대 공 소유자가 현재 위치에서 시도할 수 있는 슛 위협 미리보기. */
+  threatShots: CandidatePreview[];
   lastMove: LastMove | null;
   botAttempt: number;
   message: ClientMessage | null;

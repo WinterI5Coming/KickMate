@@ -8,7 +8,7 @@
 
 import strings from "../../content/strings.json";
 import theme from "../../content/theme.json";
-import { gameResult } from "../engine/rules";
+import { gameResult, isPressured, isStealProtected } from "../engine/rules";
 import {
   BOARD_H,
   BOARD_W,
@@ -16,7 +16,7 @@ import {
   type MovePreview,
   type Pos,
 } from "../engine/types";
-import { BOARD_GEOMETRY, targetForMove } from "./input";
+import { BOARD_GEOMETRY, isTargetedMove, targetForMove } from "./input";
 import type { CanvasTarget, ClientAction, ClientMessage, ClientViewState } from "./types";
 
 /** DOM에 표시할 값만 추린 상태 독립적인 표시 모델. */
@@ -27,6 +27,8 @@ export interface Presentation {
   status: string;
   showStart: boolean;
   showNewGame: boolean;
+  showHold: boolean;
+  showEndTurn: boolean;
   visibleActions: ClientAction[];
   selectedAction: ClientAction | null;
   inputLocked: boolean;
@@ -42,6 +44,8 @@ export interface RenderRefs {
   statusMessage: HTMLElement;
   startButton: HTMLButtonElement;
   newGameButton: HTMLButtonElement;
+  holdButton: HTMLButtonElement;
+  endTurnButton: HTMLButtonElement;
   actionButtons: Record<ClientAction, HTMLButtonElement>;
 }
 
@@ -97,17 +101,26 @@ function phaseStatus(state: ClientViewState): string {
  */
 export function buildPresentation(state: ClientViewState): Presentation {
   const score = state.gameState?.score ?? { home: 0, away: 0 };
-  const turn = state.gameState?.turn ?? 0;
-  const maxTurns = state.gameState?.maxTurns ?? 60;
+  const gameState = state.gameState;
+  const turn = gameState?.turn ?? 0;
+  const maxTurns = gameState?.maxTurns ?? 60;
   const isHumanTurn = state.phase === "humanTurn";
+  const selectedUsage =
+    gameState && state.selectedPieceId !== null
+      ? ` · 선택 선수 ${gameState.actionCountByPiece[state.selectedPieceId] ?? 0}/2`
+      : "";
 
   return {
     scoreHome: score.home,
     scoreAway: score.away,
-    turnText: `${turn} / ${maxTurns} ply`,
+    turnText: gameState
+      ? `${turn} / ${maxTurns} 행동 · ${gameState.activeTeam.toUpperCase()} ${gameState.actionsRemaining}/3${selectedUsage}`
+      : `${turn} / ${maxTurns} 행동`,
     status: state.message ? messageText(state.message) : phaseStatus(state),
     showStart: state.phase === "ready",
     showNewGame: state.phase === "finished" || state.phase === "fatalError",
+    showHold: isHumanTurn && state.canHold,
+    showEndTurn: isHumanTurn && state.canEndTurn,
     visibleActions: isHumanTurn ? [...state.availableActions] : [],
     selectedAction: isHumanTurn ? state.selectedAction : null,
     inputLocked: !isHumanTurn,
@@ -213,8 +226,8 @@ function drawPreviewPath(
   resolvedTarget: CanvasTarget,
   preview: Extract<MovePreview, { kind: "pass" | "shoot" }>,
 ): void {
-  const successful =
-    preview.kind === "pass" ? preview.reachesTarget : preview.outcome === "goal";
+  const chance = preview.kind === "pass" ? preview.arrivalChance : preview.goalChance;
+  const successful = preview.kind === "pass" ? preview.reachesTarget : chance >= 1;
   const color = successful ? theme.board.pathSuccess : theme.board.pathBlocked;
 
   context.fillStyle = color;
@@ -243,7 +256,41 @@ function drawPreviewPath(
   context.font = `bold ${Math.floor(BOARD_GEOMETRY.cell * 0.32)}px sans-serif`;
   context.textAlign = "center";
   context.textBaseline = "middle";
-  context.fillText(successful ? "✓" : "!", to.x, to.y);
+  // 기하적으로 다른 기물이 먼저 받는 패스는 "!"로, 나머지는 실행 전 성공 확률로 안내한다.
+  const label =
+    preview.kind === "pass" && !preview.reachesTarget
+      ? "!"
+      : `${Math.round(chance * 100)}%`;
+  context.fillText(label, to.x, to.y);
+}
+
+/** 사람 턴에 상대 공 소유자의 현재 슛 위협 경로와 득점 확률을 함께 표시한다. */
+function drawThreatLanes(context: CanvasRenderingContext2D, state: ClientViewState): void {
+  for (const { preview } of state.threatShots) {
+    if (preview.kind !== "shoot") continue;
+
+    context.fillStyle = theme.board.threat;
+    // 득점 확률이 높은 위협 레인일수록 진하게 칠해 어디를 먼저 막을지 알 수 있게 한다.
+    context.globalAlpha = 0.08 + preview.goalChance * 0.25;
+    for (const pos of preview.path) {
+      context.fillRect(
+        BOARD_GEOMETRY.originX + pos.x * BOARD_GEOMETRY.cell,
+        BOARD_GEOMETRY.originY + pos.y * BOARD_GEOMETRY.cell,
+        BOARD_GEOMETRY.cell,
+        BOARD_GEOMETRY.cell,
+      );
+    }
+    context.globalAlpha = 1;
+
+    // away는 왼쪽 골문을 공격하므로 위협 확률은 왼쪽 골문 칸 옆에 표기한다.
+    const label = targetCenter({ kind: "goal", side: "left", row: preview.goalRow });
+    if (!label) continue;
+    context.fillStyle = theme.board.threat;
+    context.font = `bold ${Math.floor(BOARD_GEOMETRY.cell * 0.26)}px sans-serif`;
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(`${Math.round(preview.goalChance * 100)}%`, label.x, label.y);
+  }
 }
 
 /** 후보 Move와 짝지어진 Preview만 사용해 실제 공 경로를 그린다. */
@@ -255,13 +302,14 @@ function drawPreviewPaths(
   for (const candidate of state.candidatePreviews) {
     const { move, preview } = candidate;
     if (preview.kind !== "pass" && preview.kind !== "shoot") continue;
+    if (!isTargetedMove(move)) continue;
     const actor = gameState.pieces.find((piece) => piece.id === move.pieceId);
     if (!actor) continue;
 
     const resolvedTarget =
       preview.kind === "pass"
         ? pieceTarget(gameState, preview.receiverPieceId)
-        : preview.outcome === "blocked" && preview.blockerPieceId !== null
+        : preview.outcome !== "goal" && preview.blockerPieceId !== null
           ? pieceTarget(gameState, preview.blockerPieceId)
           : targetForMove(gameState, move);
     if (resolvedTarget) drawPreviewPath(context, actor.pos, resolvedTarget, preview);
@@ -275,6 +323,7 @@ function drawCandidates(
   state: ClientViewState,
 ): void {
   for (const move of state.candidateMoves) {
+    if (!isTargetedMove(move)) continue;
     const target = targetForMove(gameState, move);
     const center = targetCenter(target);
     if (!center) continue;
@@ -332,10 +381,15 @@ function drawOutcomeHighlights(
   state: ClientViewState,
 ): void {
   for (const { preview } of state.candidatePreviews) {
+    if (preview.kind === "shoot" && preview.outcome === "fieldRebound" && preview.reboundPos) {
+      const rebound = cellCenter(preview.reboundPos);
+      strokeCircle(context, rebound.x, rebound.y, BOARD_GEOMETRY.cell * 0.24, theme.board.rebound, 5);
+      strokeCircle(context, rebound.x, rebound.y, BOARD_GEOMETRY.cell * 0.32, theme.board.rebound, 3);
+    }
     const pieceId =
       preview.kind === "pass"
         ? preview.receiverPieceId
-        : preview.kind === "shoot" && preview.outcome === "blocked"
+        : preview.kind === "shoot" && preview.outcome !== "goal"
           ? preview.blockerPieceId
           : null;
     if (pieceId === null) continue;
@@ -360,7 +414,15 @@ function drawOutcomeHighlights(
     );
   }
 
-  if (gameState.noSteal > 0 && gameState.ball.kind === "held") {
+  if (
+    gameState.ball.kind === "held" &&
+    gameState.stealProtection?.pieceId === gameState.ball.pieceId &&
+    isStealProtected(
+      gameState,
+      gameState.ball.pieceId,
+      gameState.stealProtection.blockedTeam,
+    )
+  ) {
     const carrierId = gameState.ball.pieceId;
     const carrier = gameState.pieces.find((piece) => piece.id === carrierId);
     if (!carrier) return;
@@ -392,6 +454,18 @@ function drawPieces(context: CanvasRenderingContext2D, state: ClientViewState): 
     context.textAlign = "center";
     context.textBaseline = "middle";
     context.fillText(piece.role, center.x, center.y);
+
+    if (gameState.ball.kind === "held" && gameState.ball.pieceId === piece.id) {
+      const stateColor =
+        gameState.heldFirmPieceId === piece.id
+          ? theme.board.heldFirm
+          : isPressured(gameState, piece.id)
+            ? theme.board.pressured
+            : null;
+      if (stateColor) {
+        strokeCircle(context, center.x, center.y, BOARD_GEOMETRY.cell * 0.39, stateColor, 5);
+      }
+    }
   }
 
   if (gameState.ball.kind === "loose") {
@@ -429,6 +503,7 @@ function drawPieces(context: CanvasRenderingContext2D, state: ClientViewState): 
 function drawCanvas(refs: RenderRefs, state: ClientViewState): void {
   drawPitch(refs.context, refs.canvas);
   if (!state.gameState) return;
+  drawThreatLanes(refs.context, state);
   drawLastMove(refs.context, state);
   drawCandidates(refs.context, state.gameState, state);
   drawPieces(refs.context, state);
@@ -452,6 +527,10 @@ export function createRenderer(refs: RenderRefs): (state: ClientViewState) => vo
     refs.startButton.disabled = !presentation.showStart;
     refs.newGameButton.hidden = !presentation.showNewGame;
     refs.newGameButton.disabled = !presentation.showNewGame;
+    refs.holdButton.hidden = !presentation.showHold;
+    refs.holdButton.disabled = !presentation.showHold;
+    refs.endTurnButton.hidden = !presentation.showEndTurn;
+    refs.endTurnButton.disabled = !presentation.showEndTurn;
 
     for (const action of ["move", "pass", "shoot"] as const) {
       const button = refs.actionButtons[action];

@@ -45,6 +45,8 @@ const refs: RenderRefs = {
   statusMessage: requireElement<HTMLElement>("#status-message"),
   startButton: requireElement<HTMLButtonElement>("#start-game"),
   newGameButton: requireElement<HTMLButtonElement>("#new-game"),
+  holdButton: requireElement<HTMLButtonElement>("#action-hold"),
+  endTurnButton: requireElement<HTMLButtonElement>("#end-turn"),
   actionButtons,
 };
 
@@ -60,6 +62,8 @@ render(controller.getViewState());
 
 refs.startButton.addEventListener("click", () => controller.startGame());
 refs.newGameButton.addEventListener("click", () => controller.restartGame());
+refs.holdButton.addEventListener("click", () => controller.holdBall());
+refs.endTurnButton.addEventListener("click", () => controller.endTurn());
 
 for (const action of Object.keys(actionButtons) as ClientAction[]) {
   actionButtons[action].addEventListener("click", () => controller.selectAction(action));

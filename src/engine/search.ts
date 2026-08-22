@@ -1,7 +1,7 @@
 /**
  * 합법 수를 미래로 전개해 현재 차례 팀에게 가장 유리한 수를 고르는 탐색 모듈.
  *
- * 각 후보에 `applyMove()`를 적용하고 제한 깊이까지 네가맥스로 재귀 탐색한 뒤, 말단
+ * 각 후보에 `applyMove()`를 적용하고 제한 깊이까지 minimax로 재귀 탐색한 뒤, 말단
  * 상태를 전달받은 `EvalFn`으로 평가한다. 알파베타 가지치기로 결과를 바꾸지 못하는
  * 하위 가지를 생략하며, 강한 수를 일정한 규칙으로 먼저 보아 가지치기 효율을 높인다.
  *
@@ -9,7 +9,7 @@
  * 반환한다. 단, 실행 시간인 `ms`는 환경과 실행 시점에 따라 달라질 수 있다.
  */
 
-import { applyMove, gameResult, legalMoves, previewMove, sideToMove } from "./rules";
+import { applyMoveOutcomes, gameResult, legalMoves, previewMove, sideToMove } from "./rules";
 import type { EvalFn, GameState, Move, SearchResult } from "./types";
 
 /** `search()`를 호출할 때 정하는 탐색 깊이와 말단 상태 평가 방법. */
@@ -35,7 +35,7 @@ function now(): number {
 /**
  * Move가 좋아 보이는 정도가 아니라 탐색할 순서만 정하는 정렬용 점수를 반환한다.
  *
- * 열린 슛, 막힌 슛, 스틸, 패스, 일반 이동 순으로 먼저 살펴본다. 강제성이 큰 수에서
+ * 열린 슛, 비득점 슛, 스틸, 패스, 일반 이동 순으로 먼저 살펴본다. 강제성이 큰 수에서
  * 높은 alpha를 일찍 확보하면 이후 후보의 알파베타 가지치기가 더 빨라질 수 있다.
  * 최종 최선 수는 이 rank가 아니라 재귀 탐색으로 얻은 실제 평가 점수로 결정한다.
  */
@@ -43,7 +43,7 @@ function moveRank(state: GameState, move: Move): number {
   switch (move.kind) {
     case "shoot": {
       const preview = previewMove(state, move);
-      return preview.kind === "shoot" && preview.outcome === "goal" ? 100 : 60;
+      return preview.kind === "shoot" && preview.goalChance >= 1 ? 100 : 60;
     }
     case "steal":
       return 50;
@@ -51,6 +51,10 @@ function moveRank(state: GameState, move: Move): number {
       return 30;
     case "move":
       return 0;
+    case "hold":
+      return 20;
+    case "endTurn":
+      return -10;
   }
 }
 
@@ -79,47 +83,75 @@ function orderedMoves(state: GameState): Move[] {
  */
 export function search(state: GameState, options: SearchOptions): SearchResult {
   const startedAt = now();
-  // 루트 자체는 제외하고 negamax가 방문한 하위 상태 수를 센다.
+  // 루트 자체는 제외하고 minimax가 방문한 하위 상태 수를 센다.
   let nodes = 0;
+  const perspective = sideToMove(state);
 
   /**
-   * `position`의 현재 차례 팀이 얻을 수 있는 최선의 점수를 재귀적으로 계산한다.
+   * 루트 팀 관점으로 현재 국면의 최선 점수를 계산한다.
    *
-   * 차례가 바뀔 때 관점도 반대가 되므로 자식의 최고 점수에 음수를 붙이면 현재 팀의
-   * 점수가 된다. 이 부호 대칭을 이용해 최대화와 최소화를 하나의 함수로 표현한다.
-   * alpha는 현재까지 보장된 하한, beta는 상대가 허용할 상한이며, 하한이 상한 이상이면
-   * 나머지 수가 상위 결정에 영향을 줄 수 없어 탐색을 중단한다.
+   * 한 팀은 최대 세 원자 행동을 연속으로 수행하므로, 현재 행동 팀이 루트 팀일 때만
+   * 최대화하고 상대 팀일 때 최소화한다. 모든 말단을 같은 `perspective`로 평가해
+   * 같은 팀의 연속 행동에서 점수 부호가 뒤집히지 않게 한다.
    */
-  const negamax = (position: GameState, depth: number, alpha: number, beta: number): number => {
+  const minimax = (position: GameState, depth: number, alpha: number, beta: number): number => {
     nodes += 1;
-    // 경기 종료 또는 깊이 소진 시 현재 차례 팀 관점으로 말단 상태를 평가한다.
+    // 경기 종료 또는 깊이 소진 시 고정한 루트 팀 관점으로 말단 상태를 평가한다.
     if (gameResult(position) !== null || depth === 0) {
-      return options.evalFn(position, sideToMove(position));
+      return options.evalFn(position, perspective);
     }
 
     const moves = orderedMoves(position);
     // 깊이가 남아도 합법 수가 없다면 더 전개할 수 없으므로 현재 상태를 평가한다.
-    if (moves.length === 0) return options.evalFn(position, sideToMove(position));
+    if (moves.length === 0) return options.evalFn(position, perspective);
 
-    let best = -INF;
-    // 매개변수 alpha를 보존하고 이 노드에서 발견한 새 하한을 별도 변수에 누적한다.
-    let lowerBound = alpha;
+    const maximizing = sideToMove(position) === perspective;
+    let best = maximizing ? -INF : INF;
     for (const move of moves) {
-      // 자식은 상대 관점이므로 경계와 반환 점수의 부호를 모두 뒤집는다.
-      const score = -negamax(applyMove(position, move), depth - 1, -beta, -lowerBound);
-      best = Math.max(best, score);
-      lowerBound = Math.max(lowerBound, score);
-      // 이미 beta 이상을 보장하면 상위 노드는 이 가지를 선택하지 않으므로 나머지를 생략한다.
-      if (lowerBound >= beta) break;
+      const score = expectedScore(position, move, depth, alpha, beta);
+      if (maximizing) {
+        best = Math.max(best, score);
+        alpha = Math.max(alpha, best);
+      } else {
+        best = Math.min(best, score);
+        beta = Math.min(beta, best);
+      }
+      if (alpha >= beta) break;
     }
     return best;
   };
+
+  /**
+   * 하나의 Move를 확률 결과 분포의 기대값으로 평가한다.
+   *
+   * 실제 판정이 상태·수 해시로 결정돼 있어도 탐색이 그 결과를 미리 사용하면 봇이
+   * “확률을 이미 아는” 부정이 된다. 그래서 탐색은 `applyMove()` 대신 모든 결과를
+   * 확률 가중으로 합산한다. 결과가 하나뿐인 결정론적 수는 기존 알파베타 창을 그대로
+   * 물려주고, 확률 분기가 있는 수는 각 분기를 전체 창으로 정확히 평가한다.
+   */
+  function expectedScore(
+    position: GameState,
+    move: Move,
+    depth: number,
+    alpha: number,
+    beta: number,
+  ): number {
+    const outcomes = applyMoveOutcomes(position, move);
+    if (outcomes.length === 1) {
+      return minimax(outcomes[0]!.state, depth - 1, alpha, beta);
+    }
+    let expectation = 0;
+    for (const outcome of outcomes) {
+      expectation += outcome.probability * minimax(outcome.state, depth - 1, -INF, INF);
+    }
+    return expectation;
+  }
 
   // 루트에서 탐색할 수 없는 두 경우에도 일관된 SearchResult 형태를 반환한다.
   if (gameResult(state) !== null || options.depth <= 0) {
     return {
       best: null,
-      score: options.evalFn(state, sideToMove(state)),
+      score: options.evalFn(state, perspective),
       values: [],
       nodes,
       depth: options.depth,
@@ -130,24 +162,24 @@ export function search(state: GameState, options: SearchOptions): SearchResult {
   // SearchResult의 필드 타입을 재사용해 후보 결과 객체의 형태가 따로 어긋나지 않게 한다.
   const values: SearchResult["values"] = [];
   let best: Move | null = null;
-  let alpha = -INF;
+  let bestScore = -INF;
   for (const move of orderedMoves(state)) {
-    // 루트 수를 둔 뒤에는 상대 차례이므로 negamax 결과의 부호를 루트 관점으로 되돌린다.
-    const score = -negamax(applyMove(state, move), options.depth - 1, -INF, -alpha);
+    // 루트 후보는 모두 기록해야 하므로 후보 사이에 alpha 경계를 공유하지 않는다.
+    const score = expectedScore(state, move, options.depth, -INF, INF);
     // 분석 UI가 최선 수와 다른 후보의 차이를 비교할 수 있도록 루트 후보를 모두 보존한다.
     values.push({ move, score });
     // 동점에는 먼저 정렬된 수를 유지하여 같은 입력의 best 선택을 결정적으로 만든다.
-    if (score > alpha) {
-      alpha = score;
+    if (score > bestScore) {
+      bestScore = score;
       best = move;
     }
   }
 
   // 종료 조건 외의 이유로 합법 수가 하나도 없었던 상태도 자체 평가 점수를 돌려준다.
-  if (best === null) alpha = options.evalFn(state, sideToMove(state));
+  if (best === null) bestScore = options.evalFn(state, perspective);
   return {
     best,
-    score: alpha,
+    score: bestScore,
     values,
     nodes,
     depth: options.depth,

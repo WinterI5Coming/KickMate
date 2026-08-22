@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import { evalLv1 } from "./eval/lv1";
 import {
   applyMove,
+  applyMoveOutcomes,
   createInitialState,
   gameResult,
   inBounds,
+  isPressured,
   legalMoves,
   previewMove,
   sideToMove,
@@ -16,7 +18,50 @@ function setPos(state: GameState, pieceId: number, pos: Pos): void {
   state.pieces.find((piece) => piece.id === pieceId)!.pos = pos;
 }
 
+/** 실제 6대6 배치를 보존한 채 슛에 필요한 기물만 재배치한다. */
+function createShotState(reposition: (state: GameState) => void): GameState {
+  const state = createInitialState();
+  state.activeTeam = "home";
+  state.actionsRemaining = 3;
+  state.actionCountByPiece = {};
+  state.heldFirmPieceId = null;
+  state.stealProtection = null;
+  setPos(state, 5, { x: 7, y: 4 });
+  setPos(state, 6, { x: 12, y: 0 });
+  setPos(state, 11, { x: 7, y: 7 });
+  state.ball = { kind: "held", pieceId: 5 };
+  reposition(state);
+
+  expect(state.pieces).toHaveLength(12);
+  expect(state.pieces.every((piece) => inBounds(piece.pos))).toBe(true);
+  expect(new Set(state.pieces.map((piece) => `${piece.pos.x},${piece.pos.y}`)).size).toBe(12);
+  return state;
+}
+
 describe("초기 국면", () => {
+  it("첫 home 팀 턴을 3행동과 빈 선수별 사용 횟수로 시작한다", () => {
+    const state = createInitialState();
+
+    expect(sideToMove(state)).toBe("home");
+    expect(state.actionsRemaining).toBe(3);
+    expect(state.actionCountByPiece).toEqual({});
+    expect(state.heldFirmPieceId).toBeNull();
+    expect(state.stealProtection).toBeNull();
+  });
+
+  it("세 원자 행동 뒤 away의 새 3행동 팀 턴으로 넘어간다", () => {
+    let state = createInitialState();
+    for (let index = 0; index < 3; index += 1) {
+      const move = legalMoves(state).find((candidate) => candidate.kind === "move")!;
+      state = applyMove(state, move);
+    }
+
+    expect(state.turn).toBe(3);
+    expect(sideToMove(state)).toBe("away");
+    expect(state.actionsRemaining).toBe(3);
+    expect(state.actionCountByPiece).toEqual({});
+  });
+
   it("6대6 미러 배치에서 첫 home MF가 킥오프한다", () => {
     const state = createInitialState();
 
@@ -36,7 +81,6 @@ describe("초기 국면", () => {
       ["away", "FW", { x: 7, y: 4 }],
     ]);
     expect(state.ball).toEqual({ kind: "held", pieceId: 3 });
-    expect(state.noSteal).toBe(0);
     expect(sideToMove(state)).toBe("home");
   });
 
@@ -52,7 +96,6 @@ describe("초기 국면", () => {
 
   it.each([
     [1, "DF"],
-    [3, "MF"],
     [5, "FW"],
   ] as const)("home %s번 %s는 8방향 한 칸만 이동한다", (pieceId, role) => {
     const state = createInitialState();
@@ -122,6 +165,35 @@ describe("초기 국면", () => {
 });
 
 describe("수 적용", () => {
+  it("같은 선수의 세 번째 행동은 만들지 않지만 다른 선수는 남은 행동을 쓴다", () => {
+    let state = createInitialState();
+    const actorId = 0;
+    for (let index = 0; index < 2; index += 1) {
+      const move = legalMoves(state).find(
+        (candidate) => candidate.kind === "move" && candidate.pieceId === actorId,
+      )!;
+      state = applyMove(state, move);
+    }
+
+    expect(
+      legalMoves(state).some((move) => "pieceId" in move && move.pieceId === actorId),
+    ).toBe(false);
+    expect(
+      legalMoves(state).some((move) => "pieceId" in move && move.pieceId !== actorId),
+    ).toBe(true);
+  });
+
+  it("한 행동 뒤 endTurn은 행동 수를 늘리지 않고 상대 팀으로 넘긴다", () => {
+    const initial = createInitialState();
+    expect(legalMoves(initial).some((move) => move.kind === "endTurn")).toBe(false);
+    const moved = applyMove(initial, legalMoves(initial).find((move) => move.kind === "move")!);
+    const ended = applyMove(moved, { kind: "endTurn" });
+
+    expect(ended.turn).toBe(1);
+    expect(sideToMove(ended)).toBe("away");
+    expect(ended.actionsRemaining).toBe(3);
+  });
+
   it("막힌 패스는 선택한 아군과 실제 첫 수신자를 함께 예고한다", () => {
     const state = createInitialState();
     const passer = state.pieces.find((piece) => piece.id === 3)!;
@@ -144,6 +216,30 @@ describe("수 적용", () => {
       receiverPieceId: interceptor.id,
       reachesTarget: false,
     });
+
+    const intercepted = applyMove(state, {
+      kind: "pass",
+      pieceId: passer.id,
+      targetPieceId: target.id,
+    });
+    expect(intercepted.stealProtection).toEqual({
+      pieceId: interceptor.id,
+      blockedTeam: "home",
+      blockedActionsRemaining: 1,
+    });
+  });
+
+  it("같은 팀 패스는 새 스틸 보호를 만들지 않는다", () => {
+    const state = createInitialState();
+    const pass = legalMoves(state).find((move) => move.kind === "pass")!;
+    const preview = previewMove(state, pass);
+    if (preview.kind !== "pass") throw new Error("패스 미리보기가 필요합니다.");
+
+    const passed = applyMove(state, pass);
+
+    expect(state.pieces.find((piece) => piece.id === preview.receiverPieceId)?.team).toBe("home");
+    expect(passed.ball).toEqual({ kind: "held", pieceId: preview.receiverPieceId });
+    expect(passed.stealProtection).toBeNull();
   });
 
   it("골문 행을 직접 겨냥하고 경로 첫 기물을 차단자로 예고한다", () => {
@@ -159,7 +255,7 @@ describe("수 적용", () => {
       .toMatchObject({
         kind: "shoot",
         goalRow: 4,
-        outcome: "blocked",
+        outcome: "fieldRebound",
         blockerPieceId: blocker.id,
       });
   });
@@ -189,16 +285,18 @@ describe("수 적용", () => {
   it("슛 경로 모서리에서 동시에 만난 기물 중 ID가 낮은 기물을 차단자로 고른다", () => {
     const state = createInitialState();
     const shooter = state.pieces.find((piece) => piece.id === 3)!;
-    const lowerId = state.pieces.find((piece) => piece.id === 1)!;
+    const lowerId = state.pieces.find((piece) => piece.id === 7)!;
     const higherId = state.pieces.find((piece) => piece.id === 8)!;
-    shooter.pos = { x: 9, y: 2 };
-    lowerId.pos = { x: 10, y: 2 };
-    higherId.pos = { x: 9, y: 3 };
+    // (11,3)→(13,5) 대각 슛의 첫 모서리에서 (12,3)과 (11,4)가 같은 시점에 닿는다.
+    shooter.pos = { x: 11, y: 3 };
+    lowerId.pos = { x: 12, y: 3 };
+    higherId.pos = { x: 11, y: 4 };
+    setPos(state, 6, { x: 12, y: 0 });
     state.pieces = [higherId, ...state.pieces.filter((piece) => piece.id !== higherId.id)];
     state.ball = { kind: "held", pieceId: shooter.id };
 
     expect(previewMove(state, { kind: "shoot", pieceId: shooter.id, goalRow: 5 }))
-      .toMatchObject({ blockerPieceId: lowerId.id, outcome: "blocked" });
+      .toMatchObject({ blockerPieceId: lowerId.id, outcome: "fieldRebound" });
   });
 
   it("입력 상태를 변경하지 않는다", () => {
@@ -228,12 +326,15 @@ describe("수 적용", () => {
     expect(next.score).toEqual({ home: 1, away: 0 });
     expect(next.turn).toBe(1);
     expect(sideToMove(next)).toBe("away");
+    expect(next.actionsRemaining).toBe(3);
+    expect(next.actionCountByPiece).toEqual({});
     expect(next.ball).toEqual({ kind: "held", pieceId: 9 });
+    expect(next.stealProtection).toBeNull();
     expect(next.pieces.find((piece) => piece.id === 3)?.pos).toEqual({ x: 4, y: 2 });
     expect(next.pieces.find((piece) => piece.id === 9)?.pos).toEqual({ x: 6, y: 4 });
   });
 
-  it("슛 경로의 첫 기물이 선방하고 공을 소유한다", () => {
+  it("필드 슛 차단은 첫 기물 주변의 루즈볼로 전환한다", () => {
     const state = createInitialState();
     setPos(state, 6, { x: 12, y: 0 });
     setPos(state, 7, { x: 9, y: 4 });
@@ -246,14 +347,36 @@ describe("수 적용", () => {
     const next = applyMove(state, shoot!);
 
     expect(next.score).toEqual({ home: 0, away: 0 });
-    expect(next.ball).toEqual({ kind: "held", pieceId: 7 });
-    expect(next.noSteal).toBe(1);
+    expect(next.ball).toEqual({ kind: "loose", pos: { x: 8, y: 4 } });
+    expect(next.stealProtection).toBeNull();
     expect(next.turn).toBe(1);
+  });
+
+  it("GK가 슛을 막으면 공격 팀의 다음 행동 하나 동안 스틸을 보호한다", () => {
+    const state = createInitialState();
+    setPos(state, 3, { x: 11, y: 4 });
+
+    const shoot = legalMoves(state).find(
+      (move) => move.kind === "shoot" && move.pieceId === 3 && move.goalRow === 4,
+    )!;
+    const saved = applyMove(state, shoot);
+
+    expect(saved.ball).toEqual({ kind: "held", pieceId: 6 });
+    expect(saved.stealProtection).toEqual({
+      pieceId: 6,
+      blockedTeam: "home",
+      blockedActionsRemaining: 1,
+    });
+    expect(legalMoves(saved)).not.toContainEqual({
+      kind: "steal",
+      pieceId: 3,
+      targetPieceId: 6,
+    });
   });
 
   it("대각선으로 인접한 두 상대 기물을 모두 스틸 후보로 만든다", () => {
     const state = createInitialState();
-    state.turn = 1;
+    state.activeTeam = "away";
     const carrier = state.pieces.find((piece) => piece.id === 3)!;
     carrier.pos = { x: 6, y: 4 };
     state.ball = { kind: "held", pieceId: carrier.id };
@@ -267,9 +390,9 @@ describe("수 적용", () => {
     ]);
   });
 
-  it("스틸 직후 한 수 동안 재스틸을 막는다", () => {
+  it("스틸도 행동 하나를 소비한다", () => {
     const state = createInitialState();
-    state.turn = 1;
+    state.activeTeam = "away";
 
     const steal = legalMoves(state).find(
       (move) => move.kind === "steal" && move.pieceId === 11 && move.targetPieceId === 3,
@@ -279,40 +402,359 @@ describe("수 적용", () => {
     const next = applyMove(state, steal!);
 
     expect(next.ball).toEqual({ kind: "held", pieceId: 11 });
-    expect(next.noSteal).toBe(1);
+    expect(next.activeTeam).toBe("away");
+    expect(next.actionsRemaining).toBe(2);
+    expect(next.actionCountByPiece).toEqual({ 11: 1 });
     expect(legalMoves(next).some((move) => move.kind === "steal")).toBe(false);
   });
 
-  it("스틸 보호는 다음 상대 수만 막고 이후 인접한 재스틸을 다시 허용한다", () => {
+});
+
+describe("슛 차단과 리바운드", () => {
+  it("슛 경로의 아군은 차단하지 않고 공이 통과한다", () => {
+    const state = createShotState((shotState) => {
+      setPos(shotState, 4, { x: 9, y: 4 });
+    });
+    const shoot = legalMoves(state).find(
+      (move) => move.kind === "shoot" && move.pieceId === 5 && move.goalRow === 4,
+    )!;
+
+    expect(previewMove(state, shoot)).toMatchObject({
+      kind: "shoot",
+      outcome: "goal",
+      blockerPieceId: null,
+      reboundPos: null,
+    });
+  });
+
+  it("상대 필드 차단은 슈터 쪽 우선순위의 빈 칸에 루즈볼을 만든다", () => {
+    const state = createShotState((shotState) => {
+      setPos(shotState, 7, { x: 10, y: 4 });
+    });
+    const shoot = legalMoves(state).find(
+      (move) => move.kind === "shoot" && move.pieceId === 5 && move.goalRow === 4,
+    )!;
+
+    expect(previewMove(state, shoot)).toMatchObject({
+      kind: "shoot",
+      outcome: "fieldRebound",
+      blockerPieceId: 7,
+      reboundPos: { x: 9, y: 4 },
+    });
+
+    const outcomes = applyMoveOutcomes(state, shoot);
+    expect(outcomes.map((outcome) => outcome.tag)).toEqual(["fieldRebound", "goal"]);
+    expect(outcomes[0]!.probability).toBeCloseTo(0.65, 9);
+    expect(outcomes[0]!.state.ball).toEqual({ kind: "loose", pos: { x: 9, y: 4 } });
+    expect(outcomes[1]!.probability).toBeCloseTo(0.35, 9);
+    expect(outcomes[1]!.state.score).toEqual({ home: 1, away: 0 });
+    expect(outcomes.map((outcome) => outcome.state.ball)).toContainEqual(
+      applyMove(state, shoot).ball,
+    );
+  });
+
+  it("상대 GK 차단은 보호된 공 소유로 전환한다", () => {
+    const state = createShotState((shotState) => {
+      setPos(shotState, 6, { x: 10, y: 4 });
+    });
+    const shoot = legalMoves(state).find(
+      (move) => move.kind === "shoot" && move.pieceId === 5 && move.goalRow === 4,
+    )!;
+
+    expect(previewMove(state, shoot)).toMatchObject({
+      kind: "shoot",
+      outcome: "goalkeeperSave",
+      blockerPieceId: 6,
+      reboundPos: null,
+    });
+
+    const outcomes = applyMoveOutcomes(state, shoot);
+    expect(outcomes.map((outcome) => outcome.tag)).toEqual(["goalkeeperSave", "goal"]);
+    expect(outcomes[0]!.probability).toBeCloseTo(0.75, 9);
+    const saved = outcomes[0]!.state;
+    expect(saved.ball).toEqual({ kind: "held", pieceId: 6 });
+    expect(saved.stealProtection).toEqual({
+      pieceId: 6,
+      blockedTeam: "home",
+      blockedActionsRemaining: 1,
+    });
+    expect(outcomes.map((outcome) => outcome.state.ball)).toContainEqual(
+      applyMove(state, shoot).ball,
+    );
+  });
+
+  it("필드 차단자 주변이 모두 차면 차단자를 한 행동 보호한다", () => {
+    const state = createShotState((shotState) => {
+      setPos(shotState, 0, { x: 9, y: 3 });
+      setPos(shotState, 1, { x: 10, y: 3 });
+      setPos(shotState, 2, { x: 11, y: 3 });
+      setPos(shotState, 3, { x: 9, y: 4 });
+      setPos(shotState, 4, { x: 11, y: 4 });
+      setPos(shotState, 6, { x: 9, y: 5 });
+      setPos(shotState, 7, { x: 10, y: 4 });
+      setPos(shotState, 8, { x: 10, y: 5 });
+      setPos(shotState, 9, { x: 11, y: 5 });
+    });
+    const shoot = legalMoves(state).find(
+      (move) => move.kind === "shoot" && move.pieceId === 5 && move.goalRow === 4,
+    )!;
+
+    // 경로 인접 영향권이 있으면 대표 차단자는 가장 먼저 개입할 수 있는 상대가 된다.
+    const preview = previewMove(state, shoot);
+    if (preview.kind !== "shoot") throw new Error("슛 미리보기 종류 불일치");
+    expect(preview.goalChance).toBeGreaterThan(0);
+    expect(preview.goalChance).toBeLessThan(1);
+
+    const outcomes = applyMoveOutcomes(state, shoot);
+    const possession = outcomes.find((outcome) => outcome.tag === "fieldPossession");
+    expect(possession).toBeDefined();
+    const possessed = possession!.state;
+    expect(possessed.ball).toEqual({ kind: "held", pieceId: 7 });
+    expect(possessed.stealProtection).toEqual({
+      pieceId: 7,
+      blockedTeam: "home",
+      blockedActionsRemaining: 1,
+    });
+  });
+
+  it("루즈볼을 주운 기물을 상대 팀의 다음 행동 하나 동안 보호한다", () => {
     const state = createInitialState();
-    state.turn = 1;
-    const steal = legalMoves(state).find(
-      (move) => move.kind === "steal" && move.pieceId === 11 && move.targetPieceId === 3,
+    state.ball = { kind: "loose", pos: { x: 5, y: 3 } };
+    const pickup = legalMoves(state).find(
+      (move) => move.kind === "move" && move.pieceId === 3 && move.to.x === 5 && move.to.y === 3,
     )!;
 
-    const protectedState = applyMove(state, steal);
-    expect(protectedState.noSteal).toBe(1);
-    expect(legalMoves(protectedState).some((move) => move.kind === "steal")).toBe(false);
+    const pickedUp = applyMove(state, pickup);
 
-    const homeMove = legalMoves(protectedState).find(
-      (move) => move.kind === "move" && move.pieceId === 0,
-    )!;
-    const protectionExpired = applyMove(protectedState, homeMove);
-    expect(protectionExpired.noSteal).toBe(0);
-
-    const awayMove = legalMoves(protectionExpired).find(
-      (move) => move.kind === "move" && move.pieceId === 6,
-    )!;
-    const homeTurn = applyMove(protectionExpired, awayMove);
-    expect(legalMoves(homeTurn)).toContainEqual({
-      kind: "steal",
+    expect(pickedUp.ball).toEqual({ kind: "held", pieceId: 3 });
+    expect(pickedUp.stealProtection).toEqual({
       pieceId: 3,
-      targetPieceId: 11,
+      blockedTeam: "away",
+      blockedActionsRemaining: 1,
     });
   });
 });
 
+describe("압박, 버티기, 스틸 보호", () => {
+  it("인접 상대에게 압박받는 공 소유자는 바로 이동하지 못한다", () => {
+    const state = createInitialState();
+    const carrierId = state.ball.kind === "held" ? state.ball.pieceId : -1;
+    const carrier = state.pieces.find((piece) => piece.id === carrierId)!;
+    const defender = state.pieces.find((piece) => piece.team === "away" && piece.role === "FW")!;
+    defender.pos = { x: carrier.pos.x + 1, y: carrier.pos.y };
+
+    expect(isPressured(state, carrier.id)).toBe(true);
+    expect(legalMoves(state).some((move) => move.kind === "move" && move.pieceId === carrier.id)).toBe(false);
+    expect(legalMoves(state)).toContainEqual({ kind: "hold", pieceId: carrier.id });
+  });
+
+  it("버티기는 팀 행동만 소비해 탈압박 이동 뒤 한 번 더 행동할 수 있다", () => {
+    const pressured = createInitialState();
+    const carrierId = pressured.ball.kind === "held" ? pressured.ball.pieceId : -1;
+    const held = applyMove(pressured, { kind: "hold", pieceId: carrierId });
+
+    expect(held.heldFirmPieceId).toBe(carrierId);
+    const escape = legalMoves(held).find((move) => move.kind === "move" && move.pieceId === carrierId)!;
+    const escaped = applyMove(held, escape);
+    expect(escaped.heldFirmPieceId).toBeNull();
+    expect(escaped.actionCountByPiece[carrierId]).toBe(1);
+    expect(legalMoves(escaped).some((move) =>
+      "pieceId" in move && move.pieceId === carrierId &&
+      (move.kind === "pass" || move.kind === "shoot")
+    )).toBe(true);
+  });
+
+  it("버티기 뒤 패스로 공이 다른 기물에게 가면 버티기 상태를 해제한다", () => {
+    const state = createInitialState();
+    const held = applyMove(state, { kind: "hold", pieceId: 3 });
+    const pass = legalMoves(held).find(
+      (move) => move.kind === "pass" && move.pieceId === 3 && move.targetPieceId === 5,
+    )!;
+    const passed = applyMove(held, pass);
+
+    expect(passed.ball).toEqual({ kind: "held", pieceId: 5 });
+    expect(passed.heldFirmPieceId).toBeNull();
+  });
+
+  it("버티기 뒤 슛이 막혀 공이 수비수에게 가면 버티기 상태를 해제한다", () => {
+    const state = createInitialState();
+    setPos(state, 3, { x: 9, y: 4 });
+    setPos(state, 6, { x: 12, y: 0 });
+    setPos(state, 7, { x: 10, y: 4 });
+    setPos(state, 11, { x: 10, y: 1 });
+    state.ball = { kind: "held", pieceId: 3 };
+
+    const held = applyMove(state, { kind: "hold", pieceId: 3 });
+    const shoot = legalMoves(held).find(
+      (move) => move.kind === "shoot" && move.pieceId === 3 && move.goalRow === 4,
+    )!;
+    const blocked = applyMove(held, shoot);
+
+    expect(blocked.ball).toEqual({ kind: "loose", pos: { x: 9, y: 3 } });
+    expect(blocked.heldFirmPieceId).toBeNull();
+  });
+
+  it("버티기는 다음 이동을 약속할 행동 둘이 남아 있을 때만 만든다", () => {
+    const state = createInitialState();
+    const carrierId = state.ball.kind === "held" ? state.ball.pieceId : -1;
+    const firstAction = legalMoves(state).find(
+      (move) => move.kind === "move" && move.pieceId !== carrierId,
+    )!;
+    const oneActionLeft = applyMove(state, firstAction);
+
+    expect(oneActionLeft.actionsRemaining).toBe(2);
+    expect(legalMoves(oneActionLeft)).toContainEqual({ kind: "hold", pieceId: carrierId });
+
+    const secondAction = legalMoves(oneActionLeft).find(
+      (move) => move.kind === "move" && move.pieceId !== carrierId,
+    )!;
+    const finalAction = applyMove(oneActionLeft, secondAction);
+    expect(finalAction.actionsRemaining).toBe(1);
+    expect(legalMoves(finalAction)).not.toContainEqual({ kind: "hold", pieceId: carrierId });
+  });
+
+  it("첫 행동을 이미 쓴 공 소유자도 버티기 뒤 마지막 선수 행동으로 이동할 수 있다", () => {
+    const state = createInitialState();
+    const carrierId = state.ball.kind === "held" ? state.ball.pieceId : -1;
+    state.actionsRemaining = 2;
+    state.actionCountByPiece[carrierId] = 1;
+
+    expect(isPressured(state, carrierId)).toBe(true);
+    expect(legalMoves(state)).toContainEqual({ kind: "hold", pieceId: carrierId });
+  });
+
+  it("수비수는 첫 행동으로 접근하고 두 번째 행동으로 스틸한다", () => {
+    const state = createInitialState();
+    state.activeTeam = "away";
+    state.pieces.find((piece) => piece.id === 11)!.pos = { x: 8, y: 4 };
+    const defenderId = 11;
+    const approach = legalMoves(state).find(
+      (move) =>
+        move.kind === "move" &&
+        move.pieceId === defenderId &&
+        move.to.x === 7 &&
+        move.to.y === 4,
+    )!;
+    const adjacent = applyMove(state, approach);
+    const steal = legalMoves(adjacent).find(
+      (move) => move.kind === "steal" && move.pieceId === defenderId,
+    )!;
+    const stolen = applyMove(adjacent, steal);
+
+    expect(stolen.ball).toEqual({ kind: "held", pieceId: defenderId });
+    expect(stolen.stealProtection).toEqual({
+      pieceId: defenderId,
+      blockedTeam: "home",
+      blockedActionsRemaining: 1,
+    });
+  });
+
+  it("스틸 보호는 공을 잃은 팀의 다음 행동 하나 뒤 해제된다", () => {
+    const state = createInitialState();
+    state.activeTeam = "away";
+    const stolen = applyMove(
+      state,
+      legalMoves(state).find((move) => move.kind === "steal" && move.pieceId === 11)!,
+    );
+    const homeTurn = applyMove(stolen, { kind: "endTurn" });
+
+    expect(legalMoves(homeTurn).some((move) => move.kind === "steal")).toBe(false);
+    const setup = legalMoves(homeTurn).find(
+      (move) => move.kind === "move" && move.pieceId !== 3,
+    )!;
+    const afterSetup = applyMove(homeTurn, setup);
+    expect(afterSetup.stealProtection).toBeNull();
+    expect(legalMoves(afterSetup).some((move) => move.kind === "steal")).toBe(true);
+  });
+
+  it("보호 소유자를 상대 두 명이 포위하면 첫 행동부터 스틸할 수 있다", () => {
+    const state = createInitialState();
+    state.activeTeam = "away";
+    state.ball = { kind: "held", pieceId: 3 };
+    setPos(state, 7, { x: 7, y: 4 });
+    setPos(state, 10, { x: 7, y: 5 });
+    state.stealProtection = {
+      pieceId: 3,
+      blockedTeam: "away",
+      blockedActionsRemaining: 1,
+    };
+
+    expect(legalMoves(state).filter((move) => move.kind === "steal")).toEqual(
+      expect.arrayContaining([
+        { kind: "steal", pieceId: 7, targetPieceId: 3 },
+        { kind: "steal", pieceId: 10, targetPieceId: 3 },
+      ]),
+    );
+  });
+
+  it("두 번째 공격자가 두 칸 밖이면 포위로 세지 않아 보호가 유지된다", () => {
+    const state = createInitialState();
+    state.activeTeam = "away";
+    state.ball = { kind: "held", pieceId: 3 };
+    setPos(state, 10, { x: 8, y: 4 });
+    state.stealProtection = {
+      pieceId: 3,
+      blockedTeam: "away",
+      blockedActionsRemaining: 1,
+    };
+
+    expect(legalMoves(state).some((move) => move.kind === "steal")).toBe(false);
+  });
+
+  it("보호된 공 소유자는 인접한 상대가 있어도 Lv.1 스틸 위험 감점을 받지 않는다", () => {
+    const threatened = createInitialState();
+    threatened.activeTeam = "away";
+    const protectedState = structuredClone(threatened);
+    protectedState.stealProtection = {
+      pieceId: 3,
+      blockedTeam: "away",
+      blockedActionsRemaining: 1,
+    };
+
+    expect(evalLv1(protectedState, "home") - evalLv1(threatened, "home")).toBe(170);
+  });
+
+  it("두 명에게 포위된 공 소유자는 보호 상태여도 Lv.1 스틸 위험 감점을 받는다", () => {
+    const threatened = createInitialState();
+    setPos(threatened, 10, { x: 7, y: 5 });
+    const protectedState = structuredClone(threatened);
+    protectedState.stealProtection = {
+      pieceId: 3,
+      blockedTeam: "away",
+      blockedActionsRemaining: 1,
+    };
+
+    expect(evalLv1(protectedState, "home") - evalLv1(threatened, "home")).toBe(0);
+  });
+});
+
 describe("평가와 탐색", () => {
+  it.each([0, 1, 2] as const)(
+    "home 팀 턴의 %i번째 행동 뒤에도 루트 home 관점 점수를 유지한다",
+    (appliedActions) => {
+      let state = createInitialState();
+      for (let index = 0; index < appliedActions; index += 1) {
+        const move = legalMoves(state).find((candidate) => candidate.kind !== "endTurn")!;
+        state = applyMove(state, move);
+      }
+
+      expect(state.activeTeam).toBe("home");
+      const nextAtomicMove = legalMoves(state).find((candidate) => candidate.kind !== "endTurn")!;
+      if (appliedActions === 2) {
+        expect(applyMove(state, nextAtomicMove).activeTeam).toBe("away");
+      }
+
+      const result = search(state, {
+        depth: 1,
+        evalFn: (_state, perspective) => (perspective === "home" ? 123 : -123),
+      });
+
+      expect(result.best).not.toBeNull();
+      // 확률 분기의 기대값 합산에서 생기는 부동소수 오차만 허용한다.
+      expect(result.score).toBeCloseTo(123, 9);
+    },
+  );
+
   it("대각선 스틸 위협도 상하좌우 위협과 같은 170점 위험으로 평가한다", () => {
     const threatened = createInitialState();
     setPos(threatened, 7, { x: 5, y: 3 });
@@ -320,7 +762,7 @@ describe("평가와 탐색", () => {
     const safe = structuredClone(threatened);
     setPos(safe, 7, { x: 5, y: 2 });
 
-    expect(evalLv1(safe, "home") - evalLv1(threatened, "home")).toBe(170);
+    expect(evalLv1(safe, "home") - evalLv1(threatened, "home")).toBeCloseTo(170, 9);
   });
 
   it("대칭 국면의 1점 차를 관점에 따라 반대 부호로 평가한다", () => {
@@ -347,10 +789,194 @@ describe("평가와 탐색", () => {
     expect(first.values[0]).toEqual(expect.objectContaining({ move: expect.any(Object) }));
   });
 
+  it("루트 후보 뒤 상대 팀 차례에서는 루트 관점의 최솟값을 선택한다", () => {
+    const state = createInitialState();
+    state.actionsRemaining = 1;
+    const rootMove = legalMoves(state).find(
+      (move) => move.kind === "move" && move.pieceId === 1,
+    )!;
+    if (rootMove.kind !== "move") throw new Error("루트 이동 수가 없습니다.");
+    const afterRoot = applyMove(state, rootMove);
+
+    expect(afterRoot.activeTeam).toBe("away");
+    const evalFn = (position: GameState) =>
+      position.ball.kind === "held" && position.ball.pieceId < 6 ? 10 : -10;
+    const opponentScores = legalMoves(afterRoot).map((move) => evalFn(applyMove(afterRoot, move)));
+    const result = search(state, { depth: 2, evalFn });
+    const rootValue = result.values.find(
+      (value) => value.move.kind === "move" && value.move.pieceId === rootMove.pieceId &&
+        value.move.to.x === rootMove.to.x && value.move.to.y === rootMove.to.y,
+    );
+
+    expect(opponentScores).toContain(-10);
+    expect(opponentScores).toContain(10);
+    expect(rootValue?.score).toBe(Math.min(...opponentScores));
+  });
+
+  it("슛 네 결과와 hold/endTurn을 결정적인 우선순위로 정렬한다", () => {
+    const initial = createInitialState();
+    initial.actionsRemaining = 2;
+    const initialResult = search(initial, { depth: 1, evalFn: () => 0 });
+    const initialKinds = initialResult.values.map(({ move }) => move.kind);
+
+    expect(initialKinds.slice(0, 3)).toEqual(["shoot", "shoot", "shoot"]);
+    expect(initialKinds.indexOf("pass")).toBeLessThan(initialKinds.indexOf("hold"));
+    expect(initialKinds.indexOf("hold")).toBeLessThan(initialKinds.indexOf("move"));
+    expect(initialKinds.at(-1)).toBe("endTurn");
+    const expectedInitialMoves = legalMoves(initial).filter((move) => move.kind === "move");
+    const actualInitialMoves = initialResult.values
+      .map(({ move }) => move)
+      .filter((move) => move.kind === "move");
+    expect(expectedInitialMoves.length).toBeGreaterThan(1);
+    expect(actualInitialMoves).toEqual(expectedInitialMoves);
+
+    const outcomeCases = ["goal", "goalkeeperSave", "fieldRebound", "fieldPossession"] as const;
+    const observedOutcomes = new Set<string>();
+    for (const expectedOutcome of outcomeCases) {
+      const state = createShotState((shotState) => {
+        if (expectedOutcome === "goalkeeperSave") {
+          setPos(shotState, 6, { x: 10, y: 4 });
+        } else if (expectedOutcome === "fieldRebound") {
+          setPos(shotState, 7, { x: 10, y: 4 });
+        } else if (expectedOutcome === "fieldPossession") {
+          setPos(shotState, 0, { x: 9, y: 3 });
+          setPos(shotState, 1, { x: 10, y: 3 });
+          setPos(shotState, 2, { x: 11, y: 3 });
+          setPos(shotState, 3, { x: 9, y: 4 });
+          setPos(shotState, 4, { x: 11, y: 4 });
+          setPos(shotState, 6, { x: 9, y: 5 });
+          setPos(shotState, 7, { x: 10, y: 4 });
+          setPos(shotState, 8, { x: 10, y: 5 });
+          setPos(shotState, 9, { x: 11, y: 5 });
+        }
+      });
+      const first = search(state, { depth: 1, evalFn: () => 0 });
+      const second = search(state, { depth: 1, evalFn: () => 0 });
+      const shootMoves = first.values
+        .map(({ move }) => move)
+        .filter((move) => move.kind === "shoot");
+      // 확률 판정에서 슛 결과 종류는 가능한 결과 분포의 tag로 확인한다.
+      const shootTags = shootMoves.flatMap((move) =>
+        applyMoveOutcomes(state, move).map((outcome) => outcome.tag),
+      );
+      const shootChances = shootMoves.map((move) => {
+        const preview = previewMove(state, move);
+        if (preview.kind !== "shoot") throw new Error("슛 미리보기 종류 불일치");
+        return preview.goalChance;
+      });
+
+      expect(shootTags).toContain(expectedOutcome);
+      for (const tag of shootTags) {
+        if (tag !== "deterministic" && tag !== "zoneIntercept" && tag !== "received") {
+          observedOutcomes.add(tag);
+        }
+      }
+      // 확률 1의 열린 슛(rank 100)은 개입이 남은 슛(rank 60)보다 먼저 정렬된다.
+      const goalIndexes = shootChances.flatMap((chance, index) =>
+        chance >= 1 ? [index] : [],
+      );
+      const blockedIndexes = shootChances.flatMap((chance, index) =>
+        chance >= 1 ? [] : [index],
+      );
+      if (goalIndexes.length > 0 && blockedIndexes.length > 0) {
+        expect(Math.max(...goalIndexes)).toBeLessThan(Math.min(...blockedIndexes));
+      }
+      const expectedRank60Shots = legalMoves(state).filter((move) => {
+        if (move.kind !== "shoot") return false;
+        const preview = previewMove(state, move);
+        return preview.kind === "shoot" && preview.goalChance < 1;
+      });
+      const actualRank60Shots = shootMoves.filter((move) => {
+        const preview = previewMove(state, move);
+        return preview.kind === "shoot" && preview.goalChance < 1;
+      });
+      if (expectedRank60Shots.length >= 2) {
+        expect(actualRank60Shots).toEqual(expectedRank60Shots);
+      }
+      expect(first.values.map(({ move }) => move)).toEqual(second.values.map(({ move }) => move));
+      expect(first.values.slice(0, 2).every(({ move }) => move.kind === "shoot")).toBe(true);
+    }
+    expect(observedOutcomes).toEqual(
+      new Set(["goal", "goalkeeperSave", "fieldRebound", "fieldPossession"]),
+    );
+  });
+
+  it("수비 국면에서도 합법 steal을 실제 낮은 순위 수보다 먼저 정렬한다", () => {
+    const state = createInitialState();
+    state.activeTeam = "away";
+    state.actionsRemaining = 2;
+    state.actionCountByPiece = {};
+    state.heldFirmPieceId = null;
+    state.stealProtection = null;
+
+    const carrier = state.pieces.find((piece) => piece.id === 3)!;
+    const defender = state.pieces.find((piece) => piece.id === 11)!;
+    expect(state.pieces).toHaveLength(12);
+    expect(state.pieces.every((piece) => inBounds(piece.pos))).toBe(true);
+    expect(new Set(state.pieces.map((piece) => `${piece.pos.x},${piece.pos.y}`)).size).toBe(12);
+    expect(state.ball).toEqual({ kind: "held", pieceId: carrier.id });
+    expect(carrier.team).toBe("home");
+    expect(defender.team).toBe("away");
+    expect(Math.max(Math.abs(carrier.pos.x - defender.pos.x), Math.abs(carrier.pos.y - defender.pos.y))).toBe(1);
+    expect(state.stealProtection).toBeNull();
+
+    const legal = legalMoves(state);
+    const lowerKinds = ["pass", "hold", "move", "endTurn"] as const;
+    expect(legal.some((move) => move.kind === "steal")).toBe(true);
+    expect(legal.some((move) => move.kind === "move")).toBe(true);
+    expect(legal.some((move) => move.kind === "endTurn")).toBe(true);
+
+    const result = search(state, { depth: 1, evalFn: () => 0 });
+    const orderedKinds = result.values.map(({ move }) => move.kind);
+    const stealIndex = orderedKinds.indexOf("steal");
+
+    expect(stealIndex).toBeGreaterThanOrEqual(0);
+    for (const lowerKind of lowerKinds) {
+      const lowerIndex = orderedKinds.indexOf(lowerKind);
+      if (lowerIndex >= 0) expect(stealIndex).toBeLessThan(lowerIndex);
+    }
+  });
+
+  it("동일 rank 이동 후보는 legalMoves 원래 순서를 보존한다", () => {
+    const state = createInitialState();
+    state.activeTeam = "away";
+    state.actionsRemaining = 2;
+    state.actionCountByPiece = {};
+    state.heldFirmPieceId = null;
+    state.stealProtection = null;
+
+    const expectedMoves = legalMoves(state).filter((move) => move.kind === "move");
+    expect(expectedMoves.length).toBeGreaterThan(1);
+
+    const result = search(state, { depth: 1, evalFn: () => 0 });
+    const actualMoves = result.values
+      .map(({ move }) => move)
+      .filter((move) => move.kind === "move");
+
+    expect(actualMoves).toEqual(expectedMoves);
+  });
+
   it(
     "초기 6대6 국면의 깊이 3 탐색이 5초 안에 끝난다",
     () => {
       const result = search(createInitialState(), { depth: 3, evalFn: evalLv1 });
+
+      expect(result.best).not.toBeNull();
+      expect(result.depth).toBe(3);
+      expect(result.ms).toBeLessThan(5_000);
+    },
+    10_000,
+  );
+
+  it(
+    "압박과 슛 선택이 함께 있는 국면의 깊이 3 탐색이 5초 안에 끝난다",
+    () => {
+      const state = createShotState((shotState) => {
+        setPos(shotState, 9, { x: 8, y: 4 });
+      });
+      expect(isPressured(state, 5)).toBe(true);
+
+      const result = search(state, { depth: 3, evalFn: evalLv1 });
 
       expect(result.best).not.toBeNull();
       expect(result.depth).toBe(3);
@@ -433,6 +1059,10 @@ describe("완주 시뮬레이션", () => {
           expect(moves.length, `game ${gameIndex}, ply ${state.turn}`).toBeGreaterThan(0);
 
           for (const candidate of moves) {
+            if (candidate.kind === "endTurn") {
+              expect(previewMove(state, candidate)).toEqual({ kind: "endTurn" });
+              continue;
+            }
             const actingPiece = state.pieces.find((piece) => piece.id === candidate.pieceId);
             expect(actingPiece, `존재하지 않는 실행 기물: ${JSON.stringify(candidate)}`)
               .toBeDefined();
@@ -451,12 +1081,23 @@ describe("완주 시뮬레이션", () => {
               expect(
                 state.pieces.some((piece) => piece.id === preview.receiverPieceId),
               ).toBe(true);
+              expect(preview.arrivalChance).toBeGreaterThan(0);
+              expect(preview.arrivalChance).toBeLessThanOrEqual(1);
 
-              const applied = applyMove(state, candidate);
-              expect(applied.ball).toEqual({
+              const outcomes = applyMoveOutcomes(state, candidate);
+              expect(
+                outcomes.reduce((sum, outcome) => sum + outcome.probability, 0),
+              ).toBeCloseTo(1, 9);
+              // 모든 영향권을 통과한 마지막 결과에서 미리보기의 첫 수신자가 공을 받는다.
+              expect(outcomes[outcomes.length - 1]!.state.ball).toEqual({
                 kind: "held",
                 pieceId: preview.receiverPieceId,
               });
+
+              const applied = applyMove(state, candidate);
+              expect(outcomes.map((outcome) => outcome.state.ball)).toContainEqual(
+                applied.ball,
+              );
               expect(applied.score).toEqual(state.score);
             } else if (candidate.kind === "shoot") {
               expect([3, 4, 5]).toContain(candidate.goalRow);
@@ -464,21 +1105,29 @@ describe("완주 시뮬레이션", () => {
               const preview = previewMove(state, candidate);
               expect(preview.kind).toBe("shoot");
               if (preview.kind !== "shoot") throw new Error("슛 미리보기 종류 불일치");
+              expect(preview.goalChance).toBeGreaterThan(0);
+              expect(preview.goalChance).toBeLessThanOrEqual(1);
+              if (preview.goalChance >= 1) expect(preview.blockerPieceId).toBeNull();
+              else expect(preview.blockerPieceId).not.toBeNull();
+
+              const outcomes = applyMoveOutcomes(state, candidate);
+              expect(
+                outcomes.reduce((sum, outcome) => sum + outcome.probability, 0),
+              ).toBeCloseTo(1, 9);
+              // 모든 개입을 통과한 마지막 결과는 항상 득점이다.
+              const goalOutcome = outcomes[outcomes.length - 1]!;
+              expect(goalOutcome.tag).toBe("goal");
+              const expectedScore = { ...state.score };
+              expectedScore[actingPiece!.team] += 1;
+              expect(goalOutcome.state.score).toEqual(expectedScore);
 
               const applied = applyMove(state, candidate);
-              if (preview.outcome === "blocked") {
-                expect(preview.blockerPieceId).not.toBeNull();
-                expect(applied.ball).toEqual({
-                  kind: "held",
-                  pieceId: preview.blockerPieceId,
-                });
-                expect(applied.score).toEqual(state.score);
-              } else {
-                const expectedScore = { ...state.score };
-                expectedScore[actingPiece!.team] += 1;
-                expect(preview.blockerPieceId).toBeNull();
-                expect(applied.score).toEqual(expectedScore);
-              }
+              expect(
+                outcomes.map((outcome) => ({
+                  ball: outcome.state.ball,
+                  score: outcome.state.score,
+                })),
+              ).toContainEqual({ ball: applied.ball, score: applied.score });
             } else if (candidate.kind === "steal") {
               const target = state.pieces.find(
                 (piece) => piece.id === candidate.targetPieceId,
@@ -500,7 +1149,7 @@ describe("완주 시뮬레이션", () => {
           const previous = state;
           state = applyMove(state, move);
 
-          expect(state.turn).toBe(previous.turn + 1);
+          expect(state.turn).toBe(previous.turn + (move.kind === "endTurn" ? 0 : 1));
           expect(state.turn).toBeLessThanOrEqual(state.maxTurns);
           expect(state.pieces).toHaveLength(12);
           expect(new Set(state.pieces.map((piece) => piece.id)).size).toBe(12);
@@ -508,7 +1157,6 @@ describe("완주 시뮬레이션", () => {
             new Set(state.pieces.map((piece) => `${piece.pos.x},${piece.pos.y}`)).size,
           ).toBe(12);
           expect(state.pieces.every((piece) => inBounds(piece.pos))).toBe(true);
-          expect(state.noSteal === 0 || state.noSteal === 1).toBe(true);
 
           const previousGoals = previous.score.home + previous.score.away;
           const currentGoals = state.score.home + state.score.away;

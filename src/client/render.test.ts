@@ -7,12 +7,15 @@ import type { ClientViewState } from "./types";
 const readyState: ClientViewState = {
   phase: "ready",
   gameState: null,
+  canHold: false,
+  canEndTurn: false,
   selectedPieceId: null,
   selectedAction: null,
   availableActions: [],
   candidateMoves: [],
   candidatePreviews: [],
   selectedStealTargetId: null,
+  threatShots: [],
   lastMove: null,
   botAttempt: 0,
   message: null,
@@ -128,6 +131,8 @@ function createRenderRefs(): {
   buttons: Record<"move" | "pass" | "shoot", FakeButton>;
   startButton: FakeButton;
   newGameButton: FakeButton;
+  holdButton: FakeButton;
+  endTurnButton: FakeButton;
 } {
   const context = new RecordingContext();
   const buttons = {
@@ -137,11 +142,15 @@ function createRenderRefs(): {
   };
   const startButton = new FakeButton();
   const newGameButton = new FakeButton();
+  const holdButton = new FakeButton();
+  const endTurnButton = new FakeButton();
   return {
     context,
     buttons,
     startButton,
     newGameButton,
+    holdButton,
+    endTurnButton,
     refs: {
       canvas: { width: 1200, height: 720 } as HTMLCanvasElement,
       context: context as unknown as CanvasRenderingContext2D,
@@ -151,6 +160,8 @@ function createRenderRefs(): {
       statusMessage: new FakeElement() as HTMLElement,
       startButton: startButton as unknown as HTMLButtonElement,
       newGameButton: newGameButton as unknown as HTMLButtonElement,
+      holdButton: holdButton as unknown as HTMLButtonElement,
+      endTurnButton: endTurnButton as unknown as HTMLButtonElement,
       actionButtons: {
         move: buttons.move as unknown as HTMLButtonElement,
         pass: buttons.pass as unknown as HTMLButtonElement,
@@ -168,7 +179,7 @@ describe("buildPresentation", () => {
       expect.objectContaining({
         scoreHome: 0,
         scoreAway: 0,
-        turnText: "0 / 60 ply",
+        turnText: "0 / 60 행동",
         status: "게임을 시작하세요.",
         showStart: true,
         showNewGame: false,
@@ -190,6 +201,31 @@ describe("buildPresentation", () => {
     expect(presentation.visibleActions).toEqual(["move", "pass"]);
     expect(presentation.selectedAction).toBe("move");
     expect(presentation.inputLocked).toBe(false);
+  });
+
+  it("사람 팀 턴의 남은 행동과 선택 선수 사용 횟수를 표시한다", () => {
+    const gameState = createInitialState();
+    gameState.actionsRemaining = 2;
+    gameState.actionCountByPiece[3] = 1;
+
+    const presentation = buildPresentation({
+      ...humanState,
+      gameState,
+      selectedPieceId: 3,
+    });
+
+    expect(presentation.turnText).toBe("0 / 60 행동 · HOME 2/3 · 선택 선수 1/2");
+  });
+
+  it("합법 상태에서 버티기와 턴 종료 버튼만 표시한다", () => {
+    const presentation = buildPresentation({
+      ...humanState,
+      canHold: true,
+      canEndTurn: true,
+    });
+
+    expect(presentation.showHold).toBe(true);
+    expect(presentation.showEndTurn).toBe(true);
   });
 
   it("finished에서는 승리 결과와 새 게임 버튼을 표시한다", () => {
@@ -254,7 +290,7 @@ describe("buildPresentation", () => {
       gameState: draw,
     });
 
-    expect(presentation.turnText).toBe("60 / 60 ply");
+    expect(presentation.turnText).toBe("60 / 60 행동 · HOME 3/3");
     expect(presentation.status).toBe("무승부입니다.");
   });
 
@@ -286,7 +322,7 @@ describe("buildPresentation", () => {
     [{ kind: "chooseStealer" }, "공을 빼앗을 내 선수를 선택하세요."],
     [
       { kind: "protectedCarrier" },
-      "◆ 보호 중인 공 소유자는 이번 차례에 스틸할 수 없습니다.",
+      "◆ 다른 행동을 하나 완료할 때까지 이 공 소유자를 스틸할 수 없습니다.",
     ],
   ] as const)("입력 안내 메시지 %o를 문구로 표시한다", (message, expected) => {
     const presentation = buildPresentation({ ...humanState, message });
@@ -308,7 +344,7 @@ describe("createRenderer", () => {
 
     expect(refs.scoreHome.textContent).toBe("0");
     expect(refs.scoreAway.textContent).toBe("0");
-    expect(refs.turnInfo.textContent).toBe("0 / 60 ply");
+    expect(refs.turnInfo.textContent).toBe("0 / 60 행동 · HOME 3/3");
     expect(refs.statusMessage.textContent).toBe("내 차례입니다.");
     expect(startButton.hidden).toBe(true);
     expect(newGameButton.hidden).toBe(true);
@@ -353,8 +389,8 @@ describe("createRenderer", () => {
       },
     });
 
-    expect(context.arcs).toHaveLength(15);
-    expect(context.strokeCalls).toBe(2);
+    expect(context.arcs).toHaveLength(16);
+    expect(context.strokeCalls).toBe(3);
   });
 
   it("아군 기물에 연결되는 패스 후보는 기물 밖에서도 보이는 테두리로 표시한다", () => {
@@ -381,7 +417,7 @@ describe("createRenderer", () => {
     expect(context.strokes).toContainEqual([520, 360, 32]);
   });
 
-  it("성공 패스 경로는 초록 선과 ✓를 그리고 실제 수신자를 이중 강조한다", () => {
+  it("성공 패스 경로는 초록 선과 도착 확률을 그리고 실제 수신자를 이중 강조한다", () => {
     const { refs, context } = createRenderRefs();
     const gameState = createInitialState();
     const pass = legalMoves(gameState).find(
@@ -400,8 +436,8 @@ describe("createRenderer", () => {
       candidatePreviews: [{ move: pass, preview }],
     });
 
-    expect(context.texts).toContain("✓");
-    expect(context.texts.indexOf("✓")).toBeGreaterThan(context.texts.lastIndexOf("FW"));
+    expect(context.texts).toContain("100%");
+    expect(context.texts.indexOf("100%")).toBeGreaterThan(context.texts.lastIndexOf("FW"));
     expect(context.lines).toContainEqual({
       from: [600, 360],
       to: [520, 360],
@@ -416,7 +452,7 @@ describe("createRenderer", () => {
     expect(context.globalAlpha).toBe(1);
   });
 
-  it("차단 슛은 빨간 선과 !를 그리고 실제 차단자를 이중 강조한다", () => {
+  it("차단 슛은 빨간 선과 득점 확률을 그리고 실제 차단자를 이중 강조한다", () => {
     const { refs, context } = createRenderRefs();
     const gameState = createInitialState();
     gameState.pieces.find((piece) => piece.id === 3)!.pos = { x: 9, y: 2 };
@@ -439,7 +475,8 @@ describe("createRenderer", () => {
       candidatePreviews: [{ move: shoot, preview }],
     });
 
-    expect(context.texts).toContain("!");
+    // 관문 확률(필드 0.65 차단, GK 0.75 선방)을 모두 뚫을 확률 0.35×0.25는 9%로 표시된다.
+    expect(context.texts).toContain("9%");
     expect(context.lines).toContainEqual({
       from: [840, 200],
       to: [1000, 280],
@@ -454,10 +491,57 @@ describe("createRenderer", () => {
     expect(context.globalAlpha).toBe(1);
   });
 
+  it("압박받는 공 소유자와 버틴 상태를 서로 다른 테두리로 그린다", () => {
+    const pressuredRefs = createRenderRefs();
+    const gameState = createInitialState();
+
+    createRenderer(pressuredRefs.refs)({ ...humanState, gameState });
+    expect(
+      pressuredRefs.context.circleStrokes.some((stroke) => stroke.color === "#ff9f43"),
+    ).toBe(true);
+
+    const heldRefs = createRenderRefs();
+    gameState.heldFirmPieceId = gameState.ball.kind === "held" ? gameState.ball.pieceId : null;
+    createRenderer(heldRefs.refs)({ ...humanState, gameState });
+    expect(heldRefs.context.circleStrokes.some((stroke) => stroke.color === "#4dd0e1")).toBe(
+      true,
+    );
+    expect(heldRefs.context.circleStrokes.some((stroke) => stroke.color === "#ff9f43")).toBe(
+      false,
+    );
+  });
+
+  it("필드 차단 슛은 예상 루즈볼 칸을 리바운드 색으로 표시한다", () => {
+    const { refs, context } = createRenderRefs();
+    const gameState = createInitialState();
+    gameState.pieces.find((piece) => piece.id === 3)!.pos = { x: 9, y: 2 };
+    gameState.pieces.find((piece) => piece.id === 7)!.pos = { x: 11, y: 3 };
+    gameState.pieces.find((piece) => piece.id === 8)!.pos = { x: 10, y: 7 };
+    gameState.ball = { kind: "held", pieceId: 3 };
+    const shoot = legalMoves(gameState).find(
+      (move) => move.kind === "shoot" && move.pieceId === 3 && move.goalRow === 4,
+    )!;
+    const preview = previewMove(gameState, shoot);
+    expect(preview).toMatchObject({ kind: "shoot", outcome: "fieldRebound" });
+
+    createRenderer(refs)({
+      ...humanState,
+      gameState,
+      candidateMoves: [shoot],
+      candidatePreviews: [{ move: shoot, preview }],
+    });
+
+    expect(context.circleStrokes.filter((stroke) => stroke.color === "#ffd166")).toHaveLength(2);
+  });
+
   it("스틸 보호 중인 공 소유자 위에 보라색 ◆를 표시한다", () => {
     const { refs, context } = createRenderRefs();
     const gameState = createInitialState();
-    gameState.noSteal = 1;
+    gameState.stealProtection = {
+      pieceId: 3,
+      blockedTeam: "away",
+      blockedActionsRemaining: 1,
+    };
     const render = createRenderer(refs);
 
     render({ ...humanState, gameState });
@@ -468,6 +552,22 @@ describe("createRenderer", () => {
       y: 336,
       color: "#d8b4fe",
     });
+  });
+
+  it("보호 소유자를 상대 두 명이 포위하면 보라색 ◆를 표시하지 않는다", () => {
+    const { refs, context } = createRenderRefs();
+    const gameState = createInitialState();
+    gameState.pieces.find((piece) => piece.id === 10)!.pos = { x: 7, y: 5 };
+    gameState.stealProtection = {
+      pieceId: 3,
+      blockedTeam: "away",
+      blockedActionsRemaining: 1,
+    };
+    const render = createRenderer(refs);
+
+    render({ ...humanState, gameState });
+
+    expect(context.fillTextRecords.some(({ text }) => text === "◆")).toBe(false);
   });
 
   it("복수 스틸러 선택 중에는 상대 공 소유자가 아니라 후보 home 기물을 강조한다", () => {

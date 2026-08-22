@@ -10,12 +10,15 @@ import {
   applyMove,
   createInitialState,
   gameResult,
+  isStealProtected,
   legalMoves,
   previewMove,
+  SHOT_MAX,
+  sideToMove,
 } from "../engine/rules";
 import type { GameState, Move } from "../engine/types";
 import type { EngineClient } from "./engineClient";
-import { moveMatchesTarget, targetForMove } from "./input";
+import { isTargetedMove, moveMatchesTarget, targetForMove } from "./input";
 import type { CanvasTarget, ClientAction, ClientViewState } from "./types";
 
 const BOT_DEPTH = 3;
@@ -33,6 +36,10 @@ export interface GameController {
   selectAction(action: ClientAction): void;
   /** Canvas 클릭을 게임 공간의 대상으로 전달한다. */
   handleTarget(target: CanvasTarget): void;
+  /** 현재 압박받은 공 소유자가 버티기를 실행한다. */
+  holdBall(): void;
+  /** 현재 팀의 남은 행동을 버리고 턴을 종료한다. */
+  endTurn(): void;
   /** 비동기 작업과 Worker를 폐기한다. */
   dispose(): void;
 }
@@ -61,16 +68,34 @@ export function createGameController(options: GameControllerOptions): GameContro
   let gameEpoch = 0;
   let disposed = false;
 
+  /** 사람 턴에 봇 공 소유자가 지금 시도할 수 있는 슛 위협을 미리 계산한다. */
+  function computeThreatShots(): ClientViewState["threatShots"] {
+    if (phase !== "humanTurn" || !gameState || gameState.ball.kind !== "held") return [];
+    const carrierId = gameState.ball.pieceId;
+    const carrier = gameState.pieces.find((piece) => piece.id === carrierId);
+    if (!carrier || carrier.team !== "away") return [];
+    // away는 x가 감소하는 방향으로 공격하므로 위협 골라인은 x = -1이다.
+    if (Math.abs(-1 - carrier.pos.x) > SHOT_MAX) return [];
+    return ([3, 4, 5] as const).map((goalRow) => {
+      const move = { kind: "shoot", pieceId: carrier.id, goalRow } as const;
+      return { move, preview: previewMove(gameState!, move) };
+    });
+  }
+
   function snapshot(): ClientViewState {
+    const moves = gameState ? legalMoves(gameState) : [];
     return {
       phase,
       gameState,
+      canHold: moves.some((move) => move.kind === "hold"),
+      canEndTurn: moves.some((move) => move.kind === "endTurn"),
       selectedPieceId,
       selectedAction,
       availableActions: [...availableActions],
       candidateMoves: [...candidateMoves],
       candidatePreviews: [...candidatePreviews],
       selectedStealTargetId,
+      threatShots: computeThreatShots(),
       lastMove,
       botAttempt,
       message,
@@ -106,7 +131,9 @@ export function createGameController(options: GameControllerOptions): GameContro
 
   function selectPiece(pieceId: number): void {
     if (!gameState) return;
-    const pieceMoves = legalMoves(gameState).filter((move) => move.pieceId === pieceId);
+    const pieceMoves = legalMoves(gameState).filter(
+      (move) => "pieceId" in move && move.pieceId === pieceId,
+    );
 
     selectedPieceId = pieceId;
     selectedAction = null;
@@ -131,6 +158,10 @@ export function createGameController(options: GameControllerOptions): GameContro
 
   function applyTrackedMove(move: Move): GameState {
     if (!gameState) throw new Error("진행 중인 경기가 없습니다.");
+    if (!isTargetedMove(move)) {
+      lastMove = null;
+      return applyMove(gameState, move);
+    }
     const actor = gameState.pieces.find((piece) => piece.id === move.pieceId);
     if (!actor) throw new Error(`존재하지 않는 기물 ID입니다: ${move.pieceId}`);
 
@@ -150,15 +181,22 @@ export function createGameController(options: GameControllerOptions): GameContro
     availableActions = [];
     setCandidates([]);
     message = null;
-    phase = gameResult(gameState) === null ? "botThinking" : "finished";
+    phase =
+      gameResult(gameState) !== null
+        ? "finished"
+        : sideToMove(gameState) === "home"
+          ? "humanTurn"
+          : "botThinking";
     publish();
     if (phase === "botThinking") void runBotTurn(gameEpoch);
   }
 
-  async function runBotTurn(epoch: number): Promise<void> {
+  async function analyzeWithRetry(
+    stateAtRequest: GameState,
+    epoch: number,
+  ): Promise<import("../engine/types").SearchResult | null> {
     for (let attempt = 1; attempt <= MAX_BOT_ATTEMPTS; attempt += 1) {
-      const stateAtRequest = gameState;
-      if (!stateAtRequest || phase !== "botThinking") return;
+      if (disposed || epoch !== gameEpoch || phase !== "botThinking") return null;
 
       botAttempt = attempt;
       message =
@@ -169,33 +207,53 @@ export function createGameController(options: GameControllerOptions): GameContro
 
       try {
         const result = await options.engineClient.analyze(stateAtRequest, BOT_DEPTH);
-        if (disposed || epoch !== gameEpoch || phase !== "botThinking") return;
+        if (disposed || epoch !== gameEpoch || phase !== "botThinking") return null;
         if (result.best === null) {
           if (gameResult(stateAtRequest) !== null) {
             phase = "finished";
             publish();
-            return;
+            return null;
           }
           throw new Error("봇이 합법 수를 반환하지 않았습니다.");
         }
 
-        gameState = stateAtRequest;
-        gameState = applyTrackedMove(result.best);
-        botAttempt = 0;
-        message = null;
-        phase = gameResult(gameState) === null ? "humanTurn" : "finished";
-        publish();
-        return;
+        return result;
       } catch {
-        if (disposed || epoch !== gameEpoch) return;
+        if (disposed || epoch !== gameEpoch) return null;
         if (attempt < MAX_BOT_ATTEMPTS) {
           options.engineClient.restart();
         }
       }
     }
 
-    phase = "fatalError";
-    message = { kind: "fatalError" };
+    if (!disposed && epoch === gameEpoch && phase === "botThinking") {
+      phase = "fatalError";
+      message = { kind: "fatalError" };
+      publish();
+    }
+    return null;
+  }
+
+  async function runBotTurn(epoch: number): Promise<void> {
+    while (
+      !disposed &&
+      epoch === gameEpoch &&
+      phase === "botThinking" &&
+      gameState &&
+      gameResult(gameState) === null &&
+      sideToMove(gameState) === "away"
+    ) {
+      const result = await analyzeWithRetry(gameState, epoch);
+      if (!result || result.best === null) return;
+
+      gameState = applyTrackedMove(result.best);
+      botAttempt = 0;
+      message = null;
+      publish();
+    }
+
+    if (!gameState || disposed || epoch !== gameEpoch || phase !== "botThinking") return;
+    phase = gameResult(gameState) === null ? "humanTurn" : "finished";
     publish();
   }
 
@@ -220,7 +278,7 @@ export function createGameController(options: GameControllerOptions): GameContro
       }
 
       const pieceMoves = legalMoves(gameState).filter(
-        (move) => move.pieceId === selectedPieceId,
+        (move) => "pieceId" in move && move.pieceId === selectedPieceId,
       );
       selectedAction = action;
       selectedStealTargetId = null;
@@ -260,7 +318,9 @@ export function createGameController(options: GameControllerOptions): GameContro
 
       const actionMove = candidateMoves.find(
         (move) =>
-          move.kind === selectedAction && moveMatchesTarget(gameState!, move, target),
+          isTargetedMove(move) &&
+          move.kind === selectedAction &&
+          moveMatchesTarget(gameState!, move, target),
       );
       if (actionMove) {
         applyHumanMove(actionMove);
@@ -304,7 +364,9 @@ export function createGameController(options: GameControllerOptions): GameContro
             publish();
           } else {
             message = {
-              kind: gameState.noSteal > 0 ? "protectedCarrier" : "cannotSteal",
+              kind: isStealProtected(gameState, piece.id, sideToMove(gameState))
+                ? "protectedCarrier"
+                : "cannotSteal",
             };
             publish();
           }
@@ -321,6 +383,20 @@ export function createGameController(options: GameControllerOptions): GameContro
       }
 
       selectPiece(piece.id);
+    },
+    holdBall() {
+      if (phase !== "humanTurn" || !gameState) return;
+      const hold = legalMoves(gameState).find(
+        (move): move is Extract<Move, { kind: "hold" }> => move.kind === "hold",
+      );
+      if (hold) applyHumanMove(hold);
+    },
+    endTurn() {
+      if (phase !== "humanTurn" || !gameState) return;
+      const endTurn = legalMoves(gameState).find(
+        (move): move is Extract<Move, { kind: "endTurn" }> => move.kind === "endTurn",
+      );
+      if (endTurn) applyHumanMove(endTurn);
     },
     dispose() {
       disposed = true;

@@ -3,7 +3,7 @@ import { createInitialState, legalMoves } from "../engine/rules";
 import type { GameState, Move, SearchResult } from "../engine/types";
 import type { EngineClient } from "./engineClient";
 import { createGameController } from "./gameController";
-import { targetForMove } from "./input";
+import { isTargetedMove, targetForMove } from "./input";
 import type { ClientViewState } from "./types";
 
 /** 실제 Worker 탐색 대신 Controller가 요청하는 분석 경계만 제어하는 테스트 대역. */
@@ -48,7 +48,21 @@ function createMultipleStealState(): GameState {
 
 function createProtectedStealState(): GameState {
   const state = createStealState();
-  state.noSteal = 1;
+  state.stealProtection = {
+    pieceId: 9,
+    blockedTeam: "home",
+    blockedActionsRemaining: 1,
+  };
+  return state;
+}
+
+function createSurroundedProtectedStealState(): GameState {
+  const state = createMultipleStealState();
+  state.stealProtection = {
+    pieceId: 9,
+    blockedTeam: "home",
+    blockedActionsRemaining: 1,
+  };
   return state;
 }
 
@@ -149,7 +163,7 @@ describe("GameController", () => {
     expect(controller.getViewState().selectedPieceId).toBe(homePiece.id);
   });
 
-  it("선택한 기물의 합법 수에서 사용할 수 있는 행동 버튼을 계산한다", () => {
+  it("압박받은 초기 공 소유자는 이동 없이 패스와 슛 버튼만 사용할 수 있다", () => {
     const controller = createGameController({
       engineClient: new FakeEngineClient(),
       onChange: () => undefined,
@@ -161,7 +175,36 @@ describe("GameController", () => {
 
     controller.handleTarget({ kind: "cell", pos: { ...carrier.pos } });
 
-    expect(controller.getViewState().availableActions).toEqual(["move", "pass", "shoot"]);
+    expect(controller.getViewState().availableActions).toEqual(["pass", "shoot"]);
+  });
+
+  it("압박받은 공 소유자는 버티기 버튼으로 이동 허가를 얻고 home 턴을 유지한다", () => {
+    const controller = createGameController({
+      engineClient: new FakeEngineClient(),
+      onChange: () => undefined,
+      createState: () => {
+        const state = createInitialState();
+        const carrierId = state.ball.kind === "held" ? state.ball.pieceId : -1;
+        const carrier = state.pieces.find((piece) => piece.id === carrierId)!;
+        const defender = state.pieces.find(
+          (piece) => piece.team === "away" && piece.role === "FW",
+        )!;
+        defender.pos = { x: carrier.pos.x + 1, y: carrier.pos.y };
+        return state;
+      },
+    });
+    controller.startGame();
+
+    expect(controller.getViewState().canHold).toBe(true);
+    controller.holdBall();
+
+    expect(controller.getViewState()).toEqual(
+      expect.objectContaining({
+        phase: "humanTurn",
+        gameState: expect.objectContaining({ actionsRemaining: 2 }),
+        lastMove: null,
+      }),
+    );
   });
 
   it("행동을 선택하면 해당 종류의 합법 후보만 표시한다", () => {
@@ -329,9 +372,8 @@ describe("GameController", () => {
     );
   });
 
-  it("합법 이동 대상을 클릭하면 사람 수를 적용하고 botThinking으로 전환한다", () => {
+  it("첫 home 행동 뒤 home 행동이 남으면 botThinking으로 바꾸지 않는다", () => {
     const engineClient = new FakeEngineClient();
-    engineClient.analyzeImpl = () => new Promise<SearchResult>(() => undefined);
     const controller = createGameController({ engineClient, onChange: () => undefined });
     controller.startGame();
     const state = controller.getViewState().gameState!;
@@ -344,8 +386,8 @@ describe("GameController", () => {
 
     expect(controller.getViewState()).toEqual(
       expect.objectContaining({
-        phase: "botThinking",
-        gameState: expect.objectContaining({ turn: 1 }),
+        phase: "humanTurn",
+        gameState: expect.objectContaining({ turn: 1, actionsRemaining: 2 }),
         selectedPieceId: null,
         selectedAction: null,
         candidateMoves: [],
@@ -356,6 +398,28 @@ describe("GameController", () => {
         },
       }),
     );
+    expect(engineClient.analyzeCalls).toHaveLength(0);
+  });
+
+  it("턴 종료 버튼은 남은 행동을 버리고 봇 분석을 시작한다", () => {
+    const engineClient = new FakeEngineClient();
+    engineClient.analyzeImpl = () => new Promise<SearchResult>(() => undefined);
+    const controller = createGameController({ engineClient, onChange: () => undefined });
+    controller.startGame();
+    const state = controller.getViewState().gameState!;
+    const move = legalMoves(state).find((candidate) => candidate.kind === "move")!;
+    const actor = state.pieces.find((piece) => piece.id === move.pieceId)!;
+    controller.handleTarget({ kind: "cell", pos: { ...actor.pos } });
+    controller.selectAction("move");
+
+    controller.handleTarget(targetForMove(state, move));
+    expect(controller.getViewState().canEndTurn).toBe(true);
+    controller.endTurn();
+
+    expect(controller.getViewState()).toEqual(
+      expect.objectContaining({ phase: "botThinking", lastMove: null }),
+    );
+    expect(engineClient.analyzeCalls).toHaveLength(1);
   });
 
   it("패스 대상 home 기물 클릭은 선택 전환보다 패스를 우선 적용한다", () => {
@@ -401,7 +465,7 @@ describe("GameController", () => {
 
     expect(controller.getViewState()).toEqual(
       expect.objectContaining({
-        phase: "botThinking",
+        phase: "humanTurn",
         gameState: expect.objectContaining({
           turn: 1,
           ball: { kind: "held", pieceId: stealer.id },
@@ -428,7 +492,7 @@ describe("GameController", () => {
 
     expect(controller.getViewState()).toEqual(
       expect.objectContaining({
-        phase: "botThinking",
+        phase: "humanTurn",
         gameState: expect.objectContaining({ ball: { kind: "held", pieceId: 3 } }),
         selectedStealTargetId: null,
       }),
@@ -466,7 +530,7 @@ describe("GameController", () => {
 
     expect(controller.getViewState()).toEqual(
       expect.objectContaining({
-        phase: "botThinking",
+        phase: "humanTurn",
         gameState: expect.objectContaining({ ball: { kind: "held", pieceId: stealer.id } }),
         selectedStealTargetId: null,
       }),
@@ -512,7 +576,28 @@ describe("GameController", () => {
     expect(controller.getViewState().message).toEqual({ kind: "protectedCarrier" });
   });
 
-  it("사람 수 뒤 봇 수를 적용하고 다시 humanTurn으로 돌아온다", async () => {
+  it("보호 중이어도 두 명이 포위한 상대 공 소유자는 스틸러 선택으로 들어간다", () => {
+    const controller = createGameController({
+      engineClient: new FakeEngineClient(),
+      onChange: () => undefined,
+      createState: createSurroundedProtectedStealState,
+    });
+    controller.startGame();
+    const carrier = controller.getViewState().gameState!.pieces.find(
+      (piece) => piece.id === 9,
+    )!;
+
+    controller.handleTarget({ kind: "cell", pos: { ...carrier.pos } });
+
+    expect(controller.getViewState()).toEqual(
+      expect.objectContaining({
+        selectedStealTargetId: carrier.id,
+        message: { kind: "chooseStealer" },
+      }),
+    );
+  });
+
+  it("사람이 턴을 종료하면 봇의 전체 팀 턴 뒤 humanTurn으로 돌아온다", async () => {
     const states: ClientViewState[] = [];
     const engineClient = new FakeEngineClient();
     engineClient.analyzeImpl = async (state, depth) => ({
@@ -535,21 +620,111 @@ describe("GameController", () => {
     controller.selectAction("move");
 
     controller.handleTarget(targetForMove(state, move));
+    controller.endTurn();
     await flushPromises();
 
     expect(states.some((published) => published.phase === "botThinking")).toBe(true);
     expect(engineClient.analyzeCalls[0]?.depth).toBe(3);
     const finalView = controller.getViewState();
-    const botActorId = finalView.lastMove?.move.pieceId;
+    const botActorId =
+      finalView.lastMove && "pieceId" in finalView.lastMove.move
+        ? finalView.lastMove.move.pieceId
+        : undefined;
     expect(finalView).toEqual(
       expect.objectContaining({
         phase: "humanTurn",
-        gameState: expect.objectContaining({ turn: 2 }),
+        gameState: expect.objectContaining({ turn: 4 }),
         lastMove: expect.objectContaining({ move: expect.any(Object) }),
       }),
     );
     expect(finalView.gameState?.pieces.find((piece) => piece.id === botActorId)?.team).toBe(
       "away",
+    );
+  });
+
+  it("봇은 away 행동이 남아 있는 동안 분석과 적용을 반복한다", async () => {
+    const engineClient = new FakeEngineClient();
+    const responses: Array<ReturnType<typeof deferred<SearchResult>>> = [];
+    engineClient.analyzeImpl = () => {
+      const response = deferred<SearchResult>();
+      responses.push(response);
+      return response.promise;
+    };
+    const controller = createGameController({ engineClient, onChange: () => undefined });
+    controller.startGame();
+    const home = controller.getViewState().gameState!;
+    const homeMove = legalMoves(home).find((move) => move.kind === "move")!;
+    const actor = home.pieces.find((piece) => piece.id === homeMove.pieceId)!;
+    controller.handleTarget({ kind: "cell", pos: { ...actor.pos } });
+    controller.selectAction("move");
+    controller.handleTarget(targetForMove(home, homeMove));
+    controller.endTurn();
+
+    for (let index = 0; index < 3; index += 1) {
+      const state = engineClient.analyzeCalls[index]!.state;
+      const best = legalMoves(state).find((move) => move.kind !== "endTurn")!;
+      responses[index]!.resolve({
+        best,
+        score: 0,
+        nodes: 1,
+        depth: 3,
+        ms: 0,
+        values: [{ move: best, score: 0 }],
+      });
+      await flushPromises();
+    }
+
+    expect(engineClient.analyzeCalls).toHaveLength(3);
+    expect(controller.getViewState().phase).toBe("humanTurn");
+    expect(controller.getViewState().gameState?.activeTeam).toBe("home");
+  });
+
+  it("성공한 봇 행동 뒤 다음 행동 분석은 재시도를 새로 시작하고 endTurn으로 끝낼 수 있다", async () => {
+    const states: ClientViewState[] = [];
+    const engineClient = new FakeEngineClient();
+    let secondActionAttempts = 0;
+    engineClient.analyzeImpl = async (state, depth) => {
+      if (state.actionsRemaining === 2) {
+        secondActionAttempts += 1;
+        if (secondActionAttempts < 3) throw new Error("두 번째 봇 행동의 일시적 실패");
+      }
+      const best =
+        state.actionsRemaining === 1
+          ? legalMoves(state).find((move) => move.kind === "endTurn")!
+          : legalMoves(state).find((move) => move.kind !== "endTurn")!;
+      return { best, score: 0, nodes: 1, depth, ms: 0, values: [{ move: best, score: 0 }] };
+    };
+    const controller = createGameController({
+      engineClient,
+      onChange: (state) => states.push(state),
+    });
+    controller.startGame();
+    const home = controller.getViewState().gameState!;
+    const homeMove = legalMoves(home).find((move) => move.kind === "move")!;
+    const actor = home.pieces.find((piece) => piece.id === homeMove.pieceId)!;
+    controller.handleTarget({ kind: "cell", pos: { ...actor.pos } });
+    controller.selectAction("move");
+    controller.handleTarget(targetForMove(home, homeMove));
+    controller.endTurn();
+    await flushPromises();
+
+    expect(engineClient.analyzeCalls).toHaveLength(5);
+    expect(engineClient.restartCalls).toBe(2);
+    expect(
+      states
+        .map((state) => state.message)
+        .filter((message) => message?.kind === "botRetry"),
+    ).toEqual([
+      { kind: "botRetry", attempt: 2, maxAttempts: 3 },
+      { kind: "botRetry", attempt: 3, maxAttempts: 3 },
+    ]);
+    expect(controller.getViewState()).toEqual(
+      expect.objectContaining({
+        phase: "humanTurn",
+        gameState: expect.objectContaining({ activeTeam: "home", turn: 3 }),
+        botAttempt: 0,
+        lastMove: null,
+      }),
     );
   });
 
@@ -595,6 +770,7 @@ describe("GameController", () => {
     const shoot = legalMoves(state).find(
       (move) => move.kind === "shoot" && move.pieceId === shooter.id,
     )!;
+    if (!isTargetedMove(shoot)) throw new Error("슛은 Canvas 대상 행동이어야 합니다.");
     controller.handleTarget({ kind: "cell", pos: { ...shooter.pos } });
     controller.selectAction("shoot");
 
@@ -649,6 +825,7 @@ describe("GameController", () => {
     controller.selectAction("move");
 
     controller.handleTarget(targetForMove(state, move));
+    controller.endTurn();
     await flushPromises();
 
     expect(controller.getViewState()).toEqual(
@@ -657,6 +834,7 @@ describe("GameController", () => {
         gameState: expect.objectContaining({ turn: 2 }),
       }),
     );
+    expect(engineClient.analyzeCalls).toHaveLength(1);
   });
 
   it("봇의 세 번째 골 직후 finished로 전환하고 사람 입력을 열지 않는다", async () => {
@@ -685,6 +863,7 @@ describe("GameController", () => {
     controller.selectAction("move");
 
     controller.handleTarget(targetForMove(state, humanMove));
+    controller.endTurn();
     await flushPromises();
 
     expect(controller.getViewState()).toEqual(
@@ -727,10 +906,11 @@ describe("GameController", () => {
     controller.selectAction("move");
 
     controller.handleTarget(targetForMove(state, move));
+    controller.endTurn();
     await flushPromises();
 
     expect(engineClient.restartCalls).toBe(2);
-    expect(engineClient.analyzeCalls).toHaveLength(3);
+    expect(engineClient.analyzeCalls).toHaveLength(5);
     expect(
       states
         .map((published) => published.message)
@@ -742,7 +922,7 @@ describe("GameController", () => {
     expect(controller.getViewState()).toEqual(
       expect.objectContaining({
         phase: "humanTurn",
-        gameState: expect.objectContaining({ turn: 2 }),
+        gameState: expect.objectContaining({ turn: 4 }),
       }),
     );
   });
@@ -758,6 +938,7 @@ describe("GameController", () => {
     controller.handleTarget({ kind: "cell", pos: { ...actor.pos } });
     controller.selectAction("move");
     controller.handleTarget(targetForMove(state, move));
+    controller.endTurn();
     await flushPromises();
 
     expect(engineClient.analyzeCalls).toHaveLength(3);
@@ -801,6 +982,7 @@ describe("GameController", () => {
     controller.selectAction("move");
 
     controller.handleTarget(targetForMove(state, move));
+    controller.endTurn();
     await flushPromises();
 
     expect(engineClient.analyzeCalls).toHaveLength(3);
@@ -820,8 +1002,10 @@ describe("GameController", () => {
     controller.handleTarget({ kind: "cell", pos: { ...actor.pos } });
     controller.selectAction("move");
     controller.handleTarget(targetForMove(state, humanMove));
+    controller.endTurn();
     const stateAtBotTurn = controller.getViewState().gameState!;
     const botMove = legalMoves(stateAtBotTurn)[0]!;
+    expect(engineClient.analyzeCalls).toHaveLength(1);
 
     controller.dispose();
     pending.resolve({
@@ -850,8 +1034,10 @@ describe("GameController", () => {
     controller.handleTarget({ kind: "cell", pos: { ...actor.pos } });
     controller.selectAction("move");
     controller.handleTarget(targetForMove(oldState, humanMove));
+    controller.endTurn();
     const oldBotState = controller.getViewState().gameState!;
     const oldBotMove = legalMoves(oldBotState)[0]!;
+    expect(engineClient.analyzeCalls).toHaveLength(1);
 
     controller.restartGame();
     pending.resolve({
@@ -871,5 +1057,59 @@ describe("GameController", () => {
         lastMove: null,
       }),
     );
+  });
+});
+
+describe("슛 위협 미리보기", () => {
+  function createThreatState(): GameState {
+    const state = createInitialState();
+    // away MF 9가 슛 거리(골라인 x=-1에서 7칸) 안인 (5,5)에서 공을 잡은 사람 턴을 만든다.
+    state.pieces.find((piece) => piece.id === 3)!.pos = { x: 7, y: 2 };
+    state.pieces.find((piece) => piece.id === 9)!.pos = { x: 5, y: 5 };
+    state.ball = { kind: "held", pieceId: 9 };
+    return state;
+  }
+
+  it("사람 턴에 슛 거리 안의 away 공 소유자는 골문 세 행의 위협 미리보기를 노출한다", () => {
+    const controller = createGameController({
+      engineClient: new FakeEngineClient(),
+      onChange: () => undefined,
+      createState: createThreatState,
+    });
+    controller.startGame();
+
+    const threats = controller.getViewState().threatShots;
+    expect(threats.map(({ move }) => move)).toEqual([
+      { kind: "shoot", pieceId: 9, goalRow: 3 },
+      { kind: "shoot", pieceId: 9, goalRow: 4 },
+      { kind: "shoot", pieceId: 9, goalRow: 5 },
+    ]);
+    for (const { preview } of threats) {
+      expect(preview.kind).toBe("shoot");
+      if (preview.kind !== "shoot") throw new Error("슛 미리보기 종류 불일치");
+      expect(preview.goalChance).toBeGreaterThan(0);
+      expect(preview.goalChance).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("home이 공을 가지면 위협 미리보기를 만들지 않는다", () => {
+    const controller = createGameController({
+      engineClient: new FakeEngineClient(),
+      onChange: () => undefined,
+    });
+    controller.startGame();
+
+    expect(controller.getViewState().threatShots).toEqual([]);
+  });
+
+  it("away 공 소유자가 슛 거리 밖이면 위협 미리보기를 만들지 않는다", () => {
+    const controller = createGameController({
+      engineClient: new FakeEngineClient(),
+      onChange: () => undefined,
+      createState: createStealState,
+    });
+    controller.startGame();
+
+    expect(controller.getViewState().threatShots).toEqual([]);
   });
 });

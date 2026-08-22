@@ -10,7 +10,7 @@
  * 탐색이 더 유망한 수를 먼저 선택하도록 돕는 빠른 근사치다.
  */
 
-import { previewMove } from "../rules";
+import { isStealProtected, previewMove } from "../rules";
 import { BOARD_W, type EvalFn, type GameState, type Piece } from "../types";
 
 /** 열린 슛 후보로 인정할 공 소유자와 상대 골라인 사이의 최대 x 거리. */
@@ -19,25 +19,27 @@ const SHOT_MAX = 7;
 const GOAL_ROWS = [3, 4, 5] as const;
 
 /**
- * 공 소유자에게 골대 안으로 향하면서 중간 기물에 막히지 않는 슛이 하나라도 있는지 본다.
+ * 공 소유자가 지금 시도할 수 있는 슛 중 가장 높은 득점 확률을 0..1로 반환한다.
  *
- * 실제 상태 전이와 같은 `previewMove()` 판정을 사용한다. 경로 위의 기물은 팀이나
- * 역할에 관계없이 슛을 막으며, 골라인까지 7칸을 넘으면 슛할 수 없다.
+ * 실제 상태 전이와 같은 `previewMove()` 판정을 사용한다. 완전히 열린 슛은 1이고,
+ * 수비 개입을 확률로 뚫어야 하는 슛은 그만큼 낮은 값이 된다. 골라인까지 7칸을 넘으면
+ * 슛할 수 없으므로 0이다.
  */
-function hasOpenShot(state: GameState, carrier: Piece): boolean {
+function bestShotChance(state: GameState, carrier: Piece): number {
   const goalX = carrier.team === "home" ? BOARD_W : -1;
   const distanceToGoal = Math.abs(goalX - carrier.pos.x);
-  if (distanceToGoal > SHOT_MAX) return false;
+  if (distanceToGoal > SHOT_MAX) return 0;
 
+  let best = 0;
   for (const goalRow of GOAL_ROWS) {
     const preview = previewMove(state, {
       kind: "shoot",
       pieceId: carrier.id,
       goalRow,
     });
-    if (preview.kind === "shoot" && preview.outcome === "goal") return true;
+    if (preview.kind === "shoot") best = Math.max(best, preview.goalChance);
   }
-  return false;
+  return best;
 }
 
 /**
@@ -61,8 +63,8 @@ export const evalLv1: EvalFn = (state, perspective) => {
     let possessionValue = 140;
     possessionValue += (carrier.team === "home" ? carrier.pos.x : 12 - carrier.pos.x) * 9;
 
-    // 당장 막히지 않은 슛을 할 수 있는 상태는 단순 소유보다 훨씬 크게 평가한다.
-    if (hasOpenShot(state, carrier)) possessionValue += 450;
+    // 당장 시도할 수 있는 슛의 최고 득점 확률만큼 열린 슛 보너스 450을 비례 배분한다.
+    possessionValue += 450 * bestShotChance(state, carrier);
 
     // 체비쇼프 거리 1은 실제 스틸 규칙과 같은 상하좌우·대각선 주변 8칸을 뜻한다.
     const underStealThreat = state.pieces.some(
@@ -71,9 +73,10 @@ export const evalLv1: EvalFn = (state, perspective) => {
         Math.max(
           Math.abs(piece.pos.x - carrier.pos.x),
           Math.abs(piece.pos.y - carrier.pos.y),
-        ) === 1,
+        ) === 1 &&
+        !isStealProtected(state, carrier.id, piece.team),
     );
-    // 이 휴리스틱은 noSteal 보호 여부와 무관하게 인접 압박 자체를 위험으로 감점한다.
+    // 보호 중인 상대는 실제로 스틸을 만들 수 없으므로 인접해도 위험으로 감점하지 않는다.
     if (underStealThreat) possessionValue -= 170;
 
     // 관점 팀이 공을 가졌으면 소유 가치를 더하고, 상대가 가졌으면 같은 값을 뺀다.

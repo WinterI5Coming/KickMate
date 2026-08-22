@@ -1,7 +1,7 @@
 {
   "$comment": "UI에 뜨는 모든 문구. 게임의 목소리는 여기서 만듭니다 — 비개발자 존.",
   "app": {
-    "title": "KickMate — 축구의 chess.com"
+    "title": "KickMate — 3행동 턴제 축구"
   },
   "judgement": {
     "best": "최선",
@@ -20,6 +20,10 @@
     "move": "이동",
     "pass": "패스",
     "shoot": "슛",
+    "hold": "버티기",
+    "endTurn": "턴 종료",
+    "pressured": "압박 중입니다. 패스·슛 또는 버티기를 선택하세요.",
+    "fieldRebound": "필드 차단 후 루즈볼이 생깁니다.",
     "ready": "게임을 시작하세요.",
     "humanTurn": "내 차례입니다.",
     "botThinking": "봇이 생각 중입니다.",
@@ -32,7 +36,7 @@
     "chooseReceiver": "패스할 아군을 선택하세요. ! 경로는 다른 선수가 먼저 받습니다.",
     "chooseGoal": "골문의 위·가운데·아래를 선택하세요. ! 경로는 수비에게 막힙니다.",
     "chooseStealer": "공을 빼앗을 내 선수를 선택하세요.",
-    "protectedCarrier": "◆ 보호 중인 공 소유자는 이번 차례에 스틸할 수 없습니다.",
+    "protectedCarrier": "◆ 다른 행동을 하나 완료할 때까지 이 공 소유자를 스틸할 수 없습니다.",
     "invalidShot": "선택한 방향으로 슛할 수 없습니다.",
     "fatalError": "봇 분석에 실패했습니다. 새 게임을 시작해 주세요."
   }

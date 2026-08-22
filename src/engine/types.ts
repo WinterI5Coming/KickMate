@@ -76,6 +76,13 @@ export type BallState =
   | { kind: "held"; pieceId: number }
   | { kind: "loose"; pos: Pos };
 
+/** 공을 잃은 팀의 다음 행동 하나를 막는 스틸 회수 유예를 기록한다. */
+export interface StealProtection {
+  pieceId: number;
+  blockedTeam: Team;
+  blockedActionsRemaining: 1;
+}
+
 /**
  * 특정 시점의 경기 전체를 재현하는 상태.
  *
@@ -87,23 +94,25 @@ export type BallState =
 export interface GameState {
   /**
    * 지금까지 적용된 행동 수(ply).
-   * 0부터 시작하며 짝수는 home, 홀수는 away 차례다.
+   * 0부터 시작하며 원자 행동을 적용할 때마다 하나씩 증가한다.
    */
   turn: number;
   /** 이 값에 도달하면 더 이상 합법 수를 만들지 않는다. 현재 기본값은 60 ply다. */
   maxTurns: number;
+  /** 현재 3행동 팀 턴을 수행하는 팀. */
+  activeTeam: Team;
+  /** 현재 팀 턴에 아직 사용할 수 있는 행동 수. */
+  actionsRemaining: number;
+  /** 현재 팀 턴에서 각 기물이 사용한 행동 수. */
+  actionCountByPiece: Record<number, number>;
+  /** 버티기 후 한 번의 이동을 허용받은 기물 ID. */
+  heldFirmPieceId: number | null;
   /** 경기 중인 12개 기물. 각 팀은 GK 1명, DF 2명, MF 2명, FW 1명으로 구성된다. */
   pieces: Piece[];
   /** 현재 공의 소유 또는 루즈볼 위치. */
   ball: BallState;
-  /**
-   * 스틸 보호 카운터.
-   *
-   * 0이면 스틸을 생성할 수 있다. 스틸이나 슛 선방 직후에는 1이 되어 즉시 다시
-   * 뺏는 행동을 막고, 수를 적용할 때마다 0까지 1씩 감소한다. 프로토타입의 상태명과
-   * 규칙을 그대로 유지하기 위해 숫자형 `noSteal`을 사용한다.
-   */
-  noSteal: number;
+  /** 직접 소유권을 얻은 기물의 1행동 스틸 보호 상태. */
+  stealProtection: StealProtection | null;
   /** 양 팀의 누적 득점. 정상 경기에서는 0 이상의 정수다. */
   score: { home: number; away: number };
 }
@@ -134,7 +143,11 @@ export type Move =
   /** 공 소유자가 상대 골문의 위·가운데·아래 행 중 하나를 직접 겨냥한다. */
   | { kind: "shoot"; pieceId: number; goalRow: 3 | 4 | 5 }
   /** 인접한 상대 공 소유자에게서 공을 빼앗는다. */
-  | { kind: "steal"; pieceId: number; targetPieceId: number };
+  | { kind: "steal"; pieceId: number; targetPieceId: number }
+  /** 압박받은 공 소유자가 다음 이동 한 번을 허용받는다. */
+  | { kind: "hold"; pieceId: number }
+  /** 남은 행동을 버리고 상대 팀 턴으로 넘긴다. */
+  | { kind: "endTurn" };
 
 /**
  * `Move`를 적용하기 전에 계산한 사용자 안내 및 상태 전이용 판정 결과.
@@ -143,6 +156,19 @@ export type Move =
  * 대상과 실제 수신자·차단자가 달라질 수 있으므로 그 결과를 명시적으로 보존한다.
  * `applyMove()`도 이 값을 사용해 화면의 예고와 실제 결과가 어긋나지 않게 한다.
  */
+/** 슛의 첫 상대 접촉과 그에 따른 결정론적 공 상태를 설명한다. */
+export interface ShootPreview {
+  kind: "shoot";
+  path: Pos[];
+  goalRow: 3 | 4 | 5;
+  /** 모든 개입이 성공했을 때 첫 개입자가 만드는 기하 결과. 확률 판정의 대표 차단 결과다. */
+  outcome: "goal" | "goalkeeperSave" | "fieldRebound" | "fieldPossession";
+  blockerPieceId: number | null;
+  reboundPos: Pos | null;
+  /** 경로 위·인접 개입을 모두 뚫고 득점할 확률. 0..1이며 개입이 없으면 1이다. */
+  goalChance: number;
+}
+
 export type MovePreview =
   | { kind: "move"; destination: Pos; picksUpLooseBall: boolean }
   | {
@@ -151,15 +177,34 @@ export type MovePreview =
       targetPieceId: number;
       receiverPieceId: number;
       reachesTarget: boolean;
+      /** 영향권 인터셉트를 모두 피해 첫 접촉 수신자에게 닿을 확률. 0..1이다. */
+      arrivalChance: number;
     }
-  | {
-      kind: "shoot";
-      path: Pos[];
-      goalRow: 3 | 4 | 5;
-      outcome: "goal" | "blocked";
-      blockerPieceId: number | null;
-    }
-  | { kind: "steal"; targetPieceId: number; protectedAfter: true };
+  | ShootPreview
+  | { kind: "steal"; targetPieceId: number; protectedAfter: true }
+  | { kind: "hold" }
+  | { kind: "endTurn" };
+
+/**
+ * 하나의 Move가 만들 수 있는 결과 상태와 그 확률.
+ *
+ * 확률은 0 초과 1 이하이며 같은 Move의 모든 결과 확률 합은 1이다. 결정론적 행동은
+ * 확률 1의 결과 하나만 갖는다. 탐색은 이 분포의 기대값으로 수를 평가하고, 실제 경기는
+ * 상태·수 해시 시드로 이 중 하나를 결정적으로 선택한다.
+ */
+export interface MoveOutcome {
+  probability: number;
+  state: GameState;
+  /** 결과를 사람이 구분할 수 있는 짧은 표식. 판정 로그와 테스트에 사용한다. */
+  tag:
+    | "deterministic"
+    | "goal"
+    | "goalkeeperSave"
+    | "fieldRebound"
+    | "fieldPossession"
+    | "zoneIntercept"
+    | "received";
+}
 
 /**
  * 한 국면을 특정 팀 관점의 숫자로 바꾸는 평가 함수 계약.
@@ -181,7 +226,7 @@ export interface SearchResult {
   best: Move | null;
   /** 현재 루트 차례 팀 관점에서 본 최선 후보의 평가 점수. */
   score: number;
-  /** 네가맥스가 방문한 하위 상태 수. 탐색 성능을 관찰하는 지표다. */
+  /** 고정 루트 관점 minimax가 방문한 하위 상태 수. 탐색 성능을 관찰하는 지표다. */
   nodes: number;
   /** 호출자가 요청했고 실제 탐색 결과에 기록된 ply 깊이. */
   depth: number;

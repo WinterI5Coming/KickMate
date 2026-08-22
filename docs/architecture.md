@@ -2,7 +2,7 @@
 
 이 문서는 KickMate 코드베이스를 처음 읽는 사람이 전체 구조와 의존 방향을 먼저 이해할 수 있도록 설명한다. 구현 완료 여부와 다음 작업은 [current-state.md](./current-state.md)에서 관리한다.
 
-> 현재 본문은 배포된 4대4 런타임 구조를 설명한다. 다음 변경으로 승인된 6대6 규칙과 엔진 계약은 [핵심 경기 규칙 개편 설계](./superpowers/specs/2026-08-19-core-gameplay-redesign-design.md)를 따르며, 구현 전까지 현재 코드의 사실과 구분한다.
+> 현재 본문은 M2.6A의 6대6 팀 턴 런타임 구조를 설명한다. 팀 턴당 3행동, 압박·버티기, 필드 슛 리바운드는 코드와 자동 테스트로 확인했고, 실제 브라우저·모바일 플레이 검증은 남아 있다. 설계 근거는 [FT&G 벤치마킹 경기 코어 개편 설계](./superpowers/specs/2026-08-22-ftg-inspired-match-core-design.md)에 남아 있다.
 
 ## 한 문장으로 보는 구조
 
@@ -93,7 +93,7 @@ Worker는 게임 규칙을 소유하지 않는다. 메시지를 변환하고 엔
 - `types.ts`: 상태, 기물, 공, 수, 탐색 결과 타입
 - `rules.ts`: 초기 상태, 합법 수 생성, 상태 전이
 - `eval/lv1.ts`: 한 국면을 숫자로 평가하는 휴리스틱
-- `search.ts`: 네가맥스와 알파베타 가지치기로 최선 수 탐색
+- `search.ts`: 같은 팀 연속 행동을 처리하는 고정 루트 관점 minimax와 알파베타 가지치기로 최선 수 탐색
 - `rules.test.ts`: 엔진의 주요 불변 조건과 상태 전이 검증
 
 엔진에서는 DOM, Canvas, Web Worker 전역, 파일시스템에 접근하지 않는다. 같은 입력에는 같은 논리적 결과를 반환하며 무작위 호출을 사용하지 않는다.
@@ -128,42 +128,54 @@ Worker는 게임 규칙을 소유하지 않는다. 메시지를 변환하고 엔
 interface GameState {
   turn: number;
   maxTurns: number;
+  activeTeam: Team;
+  actionsRemaining: number;
+  actionCountByPiece: Record<number, number>;
+  heldFirmPieceId: number | null;
   pieces: Piece[];
   ball: BallState;
-  noSteal: number;
+  stealProtection: StealProtection | null;
   score: { home: number; away: number };
 }
 ```
 
-- `turn`: 지금까지 진행된 ply. 짝수는 home, 홀수는 away 차례다.
+- `turn`: 지금까지 적용된 원자 행동(ply)이다. `endTurn`은 행동을 버리는 팀 턴 경계이므로 증가시키지 않는다.
 - `maxTurns`: 최대 ply 수다.
-- `pieces`: 현재 4대4 런타임에서는 8개 기물의 팀, 역할, 좌표다. 승인된 다음 규칙에서는 12개로 늘어난다.
+- `activeTeam`: 현재 3행동 팀 턴을 수행하는 팀이며 차례 판정의 기준이다.
+- `actionsRemaining`: 현재 팀이 이번 팀 턴에 쓸 수 있는 행동 수다.
+- `actionCountByPiece`: 현재 팀 턴에서 각 기물이 쓴 행동 수로, 한 기물의 상한은 2다.
+- `heldFirmPieceId`: 압박받은 공 소유자가 `hold` 뒤 사용할 수 있는 한 번의 이동 허가다.
+- `pieces`: 현재 6대6 런타임의 12개 기물과 각 팀, 역할, 좌표다.
 - `ball`: 특정 기물이 소유하거나 보드 위 루즈볼로 존재한다.
-- `noSteal`: 선방·스틸 직후 재스틸을 막는 보호 카운터다.
+- `stealProtection`: 보호받는 소유자와 스틸이 금지된 팀의 다음 원자 행동 1회를 명시한다. 금지된 팀의 행동이 끝나면 해제되며, 공격자 2명이 소유자에 인접하면 즉시 무시한다.
 - `score`: 양 팀 득점이다.
 
-한 번의 행동은 `Move` 네 종류 중 하나다.
+한 번의 행동은 `Move` 여섯 종류 중 하나다.
 
 ```text
 move   기물 이동
 pass   패스
 shoot  슛
 steal  스틸
+hold   압박받은 공 소유자가 다음 이동 한 번을 허용받음
+endTurn 남은 행동을 버리고 팀 턴 종료
 ```
 
-### 승인된 다음 엔진 계약 `[구현 전]`
+### 현재 M2.6A 엔진 계약
 
-6대6 개편에서는 사용자의 의도를 좌표 기울기가 아니라 대상 자체로 표현한다.
+현재 6대6 런타임은 사용자의 의도를 좌표 기울기가 아니라 대상 자체로 표현한다.
 
 ```ts
 type Move =
   | { kind: "move"; pieceId: number; to: Pos }
   | { kind: "pass"; pieceId: number; targetPieceId: number }
   | { kind: "shoot"; pieceId: number; goalRow: 3 | 4 | 5 }
-  | { kind: "steal"; pieceId: number; targetPieceId: number };
+  | { kind: "steal"; pieceId: number; targetPieceId: number }
+  | { kind: "hold"; pieceId: number }
+  | { kind: "endTurn" };
 ```
 
-엔진은 패스와 슛이 지나가는 공통 선분 경로를 계산하고 `previewMove(state, move)`로 실제 수신자·차단자·득점 여부를 상태 전이 전에 제공한다. `applyMove()`는 같은 내부 판정을 재사용해야 하며, 클라이언트는 경로 또는 차단 규칙을 복제하지 않고 엔진의 미리보기 결과만 표현한다.
+엔진은 패스와 슛이 지나가는 공통 선분 경로를 계산하고 `previewMove(state, move)`로 실제 수신자·차단자·득점·리바운드 칸을 상태 전이 전에 제공한다. 슛은 아군을 통과하며, 첫 상대가 GK면 공을 잡고 보호를 받고, 필드 선수면 인접한 빈 칸으로 결정론적 리바운드를 만든다. 스틸·패스 차단·GK 선방·필드 차단자의 직접 소유·루즈볼 회수처럼 소유권을 새로 얻은 경우에는 공을 잃은 팀의 다음 원자 행동 1회만 재스틸을 막는다. `applyMove()`는 같은 내부 판정을 재사용해야 하며, 클라이언트는 경로 또는 차단 규칙을 복제하지 않고 엔진의 미리보기 결과만 표현한다.
 
 ## 상태 전이 흐름
 
@@ -182,6 +194,8 @@ type Move =
 ```
 
 `applyMove()`는 입력 상태를 직접 변경하지 않는다. 기존 상태를 복제한 뒤 수를 적용한 새로운 상태를 반환한다.
+
+원자 행동 뒤 행동이 남으면 `activeTeam`은 유지되고, 0이 되거나 `endTurn`을 적용하면 다음 팀에 3행동과 빈 `actionCountByPiece`를 준다. 득점은 원자 행동 하나를 소비한 뒤 실점 팀의 새 3행동 킥오프로 재설정한다.
 
 ```text
 기존 상태 ──────────────── 그대로 유지

@@ -52,6 +52,8 @@ export interface GameControllerOptions {
   engineClient: EngineClient;
   onChange: (state: ClientViewState) => void;
   createState?: () => GameState;
+  /** 봇의 원자 행동 사이에 두는 호흡(ms). 사람이 봇의 수를 따라 읽을 시간을 준다. */
+  botActionDelayMs?: number;
 }
 
 /** 클로저 안에 지속되는 경기와 선택 상태를 만든다. */
@@ -180,7 +182,14 @@ export function createGameController(options: GameControllerOptions): GameContro
     let event: MatchEvent | null = null;
 
     if (move.kind === "steal") {
-      event = { team, kind: "steal" };
+      const preview = previewMove(before, move);
+      const succeeded = after.ball.kind === "held" && after.ball.pieceId === move.pieceId;
+      event = {
+        team,
+        kind: succeeded ? "steal" : "stealFailed",
+        chancePercent:
+          preview.kind === "steal" ? Math.round(preview.successChance * 100) : undefined,
+      };
     } else if (move.kind === "hold") {
       event = { team, kind: "hold" };
     } else if (move.kind === "pass" || move.kind === "shoot") {
@@ -312,6 +321,11 @@ export function createGameController(options: GameControllerOptions): GameContro
       botAttempt = 0;
       message = null;
       publish();
+      // 다음 분석 전에 잠시 멈춰 사람이 봇의 수와 판정을 따라 읽을 수 있게 한다.
+      const pause = options.botActionDelayMs ?? 0;
+      if (pause > 0) {
+        await new Promise((resolve) => setTimeout(resolve, pause));
+      }
     }
 
     if (!gameState || disposed || epoch !== gameEpoch || phase !== "botThinking") return;

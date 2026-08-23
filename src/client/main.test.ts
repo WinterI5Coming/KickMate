@@ -142,12 +142,14 @@ async function flushPromises(): Promise<void> {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.resetModules();
 });
 
 describe("브라우저 진입점", () => {
   it("직접 지정 패스와 조기 종료 뒤 봇의 전체 팀 턴을 왕복시킨다", async () => {
+    vi.useFakeTimers();
     const { elements } = installBrowserFakes();
     const initial = createInitialState();
     const pass = legalMoves(initial).find(
@@ -202,9 +204,11 @@ describe("브라우저 진입점", () => {
         result: { best, score: 0, nodes: 1, depth: 3, ms: 0, values: [] },
       });
       await flushPromises();
+      // 봇 행동 사이 900ms 호흡을 가짜 타이머로 흘려보낸다.
+      await vi.advanceTimersByTimeAsync(1000);
     }
 
     expect(elements["status-message"].textContent).toBe("내 차례입니다.");
-    expect(elements["turn-info"].textContent).toBe("4 / 60 행동 · HOME 3/3");
+    expect(elements["turn-info"].textContent).toBe("2 / 40 수 · HOME 3/3");
   });
 });

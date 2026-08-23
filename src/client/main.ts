@@ -90,7 +90,11 @@ document.title = strings.app.title;
 // 실제 브라우저에서는 직전 수(이동·패스·슛·득점)를 짧은 애니메이션으로 연출한다.
 const render = createRenderer(refs, { animate: true });
 const engineClient = createEngineClient({ timeoutMs: 5_000 });
-const controller = createGameController({ engineClient, onChange: render });
+const controller = createGameController({
+  engineClient,
+  onChange: render,
+  botActionDelayMs: 900,
+});
 
 // Controller 생성 직후에는 상태 변경이 없으므로 ready 화면을 한 번 직접 그린다.
 render(controller.getViewState());

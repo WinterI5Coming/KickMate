@@ -53,6 +53,7 @@ export interface MatchEvent {
     | "shotSaved"
     | "shotBlocked"
     | "steal"
+    | "stealFailed"
     | "hold";
   /** 실행 전 미리보기의 성공 확률(0..100 정수). 패스·슛에만 존재한다. */
   chancePercent?: number;

@@ -66,7 +66,9 @@ function eventLine(event: ClientViewState["events"][number]): string {
     case "shotBlocked":
       return `${team} ${strings.match.shoot}${chance} → ${strings.match.blocked}`;
     case "steal":
-      return `${team} ${strings.match.steal}`;
+      return `${team} ${strings.match.stealAction}${chance} → ${strings.match.success}`;
+    case "stealFailed":
+      return `${team} ${strings.match.stealAction}${chance} → ${strings.match.failed}`;
     case "hold":
       return `${team} ${strings.match.hold}`;
   }
@@ -149,7 +151,7 @@ export function buildPresentation(state: ClientViewState): Presentation {
   const score = state.gameState?.score ?? { home: 0, away: 0 };
   const gameState = state.gameState;
   const turn = gameState?.turn ?? 0;
-  const maxTurns = gameState?.maxTurns ?? 60;
+  const maxTurns = gameState?.maxTurns ?? 40;
   const isHumanTurn = state.phase === "humanTurn";
   const selectedUsage =
     gameState && state.selectedPieceId !== null
@@ -160,8 +162,8 @@ export function buildPresentation(state: ClientViewState): Presentation {
     scoreHome: score.home,
     scoreAway: score.away,
     turnText: gameState
-      ? `${turn} / ${maxTurns} 행동 · ${gameState.activeTeam.toUpperCase()} ${gameState.actionsRemaining}/3${selectedUsage}`
-      : `${turn} / ${maxTurns} 행동`,
+      ? `${turn} / ${maxTurns} 수 · ${gameState.activeTeam.toUpperCase()} ${gameState.actionsRemaining}/3${selectedUsage}`
+      : `${turn} / ${maxTurns} 수`,
     status: state.message ? messageText(state.message) : phaseStatus(state),
     showStart: state.phase === "ready",
     showNewGame: state.phase === "finished" || state.phase === "fatalError",
@@ -1140,7 +1142,7 @@ function planAnimation(
   if (lastMove.move.kind === "move") {
     // 이동 애니메이션은 토큰 중심(높이감 포함) 사이를 보간한다.
     return {
-      durationMs: 200,
+      durationMs: 300,
       kind: "pieceMove",
       pieceId: lastMove.move.pieceId,
       fromPx: pieceTokenCenter(lastMove.from),
@@ -1153,7 +1155,7 @@ function planAnimation(
     // 공이 상대에게서 스틸러에게 넘어가는 짧은 비행과 함께 스틸 판정을 띄운다.
     const victim = targetCenter(lastMove.target) ?? fromPx;
     return {
-      durationMs: 220,
+      durationMs: 400,
       kind: "ballFlight",
       pieceId: null,
       fromPx: victim,
@@ -1188,7 +1190,7 @@ function planAnimation(
         ? strings.match.intercepted
         : null;
   return {
-    durationMs: scored ? 850 : label ? 500 : 300,
+    durationMs: scored ? 1100 : label ? 650 : 450,
     kind: "ballFlight",
     pieceId: null,
     fromPx,

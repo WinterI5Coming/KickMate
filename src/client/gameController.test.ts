@@ -69,6 +69,8 @@ function createSurroundedProtectedStealState(): GameState {
 function createShortMatch(maxTurns: number): GameState {
   const state = createInitialState();
   state.maxTurns = maxTurns;
+  // 사람의 첫 행동이 곧바로 팀 턴을 끝내 수 한도 검사가 바로 일어나게 한다.
+  state.actionsRemaining = 1;
   return state;
 }
 
@@ -393,7 +395,7 @@ describe("GameController", () => {
     expect(controller.getViewState()).toEqual(
       expect.objectContaining({
         phase: "humanTurn",
-        gameState: expect.objectContaining({ turn: 1, actionsRemaining: 2 }),
+        gameState: expect.objectContaining({ turn: 0, actionsRemaining: 2 }),
         selectedPieceId: null,
         selectedAction: null,
         candidateMoves: [],
@@ -447,7 +449,7 @@ describe("GameController", () => {
     const next = controller.getViewState();
     const receiver = next.gameState!.pieces.find((piece) => piece.id === pass.targetPieceId)!;
     expect(next.gameState).toEqual(
-      expect.objectContaining({ turn: 1, ball: { kind: "held", pieceId: receiver.id } }),
+      expect.objectContaining({ turn: 0, ball: { kind: "held", pieceId: receiver.id } }),
     );
     expect(next.selectedPieceId).toBeNull();
   });
@@ -469,17 +471,17 @@ describe("GameController", () => {
 
     controller.handleTarget({ kind: "cell", pos: { ...carrier.pos } });
 
-    expect(controller.getViewState()).toEqual(
-      expect.objectContaining({
-        phase: "humanTurn",
-        gameState: expect.objectContaining({
-          turn: 1,
-          ball: { kind: "held", pieceId: stealer.id },
-        }),
-        lastMove: expect.objectContaining({ move: expect.objectContaining({ kind: "steal" }) }),
-        selectedStealTargetId: null,
-      }),
+    const view = controller.getViewState();
+    expect(view.phase).toBe("humanTurn");
+    expect(view.gameState).toEqual(expect.objectContaining({ turn: 0 }));
+    expect(view.lastMove).toEqual(
+      expect.objectContaining({ move: expect.objectContaining({ kind: "steal" }) }),
     );
+    expect(view.selectedStealTargetId).toBeNull();
+    // 스틸은 확률 판정이므로 공은 스틸러 또는 기존 소유자에게 있고, 결과가 로그에 남는다.
+    if (view.gameState!.ball.kind !== "held") throw new Error("held 상태가 아닙니다.");
+    expect([stealer.id, carrier.id]).toContain(view.gameState!.ball.pieceId);
+    expect(["steal", "stealFailed"]).toContain(view.events.at(-1)?.kind);
   });
 
   it("스틸러가 하나면 상대 공 소유자 클릭만으로 즉시 스틸한다", () => {
@@ -496,13 +498,14 @@ describe("GameController", () => {
 
     controller.handleTarget({ kind: "cell", pos: { ...carrier.pos } });
 
-    expect(controller.getViewState()).toEqual(
-      expect.objectContaining({
-        phase: "humanTurn",
-        gameState: expect.objectContaining({ ball: { kind: "held", pieceId: 3 } }),
-        selectedStealTargetId: null,
-      }),
+    const view = controller.getViewState();
+    expect(view.phase).toBe("humanTurn");
+    expect(view.selectedStealTargetId).toBeNull();
+    expect(view.lastMove).toEqual(
+      expect.objectContaining({ move: expect.objectContaining({ kind: "steal", pieceId: 3 }) }),
     );
+    if (view.gameState!.ball.kind !== "held") throw new Error("held 상태가 아닙니다.");
+    expect([3, carrier.id]).toContain(view.gameState!.ball.pieceId);
   });
 
   it("스틸러가 여러 명이면 상대 공 소유자 선택 후 스틸할 선수를 기다린다", () => {
@@ -639,7 +642,7 @@ describe("GameController", () => {
     expect(finalView).toEqual(
       expect.objectContaining({
         phase: "humanTurn",
-        gameState: expect.objectContaining({ turn: 4 }),
+        gameState: expect.objectContaining({ turn: 2 }),
         lastMove: expect.objectContaining({ move: expect.any(Object) }),
       }),
     );
@@ -727,7 +730,7 @@ describe("GameController", () => {
     expect(controller.getViewState()).toEqual(
       expect.objectContaining({
         phase: "humanTurn",
-        gameState: expect.objectContaining({ activeTeam: "home", turn: 3 }),
+        gameState: expect.objectContaining({ activeTeam: "home", turn: 2 }),
         botAttempt: 0,
         lastMove: null,
       }),
@@ -840,7 +843,7 @@ describe("GameController", () => {
         gameState: expect.objectContaining({ turn: 2 }),
       }),
     );
-    expect(engineClient.analyzeCalls).toHaveLength(1);
+    expect(engineClient.analyzeCalls).toHaveLength(3);
   });
 
   it("봇의 세 번째 골 직후 finished로 전환하고 사람 입력을 열지 않는다", async () => {
@@ -928,7 +931,7 @@ describe("GameController", () => {
     expect(controller.getViewState()).toEqual(
       expect.objectContaining({
         phase: "humanTurn",
-        gameState: expect.objectContaining({ turn: 4 }),
+        gameState: expect.objectContaining({ turn: 2 }),
       }),
     );
   });

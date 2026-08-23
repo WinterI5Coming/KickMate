@@ -188,7 +188,7 @@ describe("buildPresentation", () => {
       expect.objectContaining({
         scoreHome: 0,
         scoreAway: 0,
-        turnText: "0 / 60 행동",
+        turnText: "0 / 40 수",
         status: "게임을 시작하세요.",
         showStart: true,
         showNewGame: false,
@@ -223,7 +223,7 @@ describe("buildPresentation", () => {
       selectedPieceId: 3,
     });
 
-    expect(presentation.turnText).toBe("0 / 60 행동 · HOME 2/3 · 선택 선수 1/2");
+    expect(presentation.turnText).toBe("0 / 40 수 · HOME 2/3 · 선택 선수 1/2");
   });
 
   it("합법 상태에서 버티기와 턴 종료 버튼만 표시한다", () => {
@@ -288,9 +288,9 @@ describe("buildPresentation", () => {
     expect(presentation.inputLocked).toBe(true);
   });
 
-  it("60 ply 동점 종료는 무승부로 표시한다", () => {
+  it("수 한도 동점 종료는 무승부로 표시한다", () => {
     const draw = createInitialState();
-    draw.turn = 60;
+    draw.turn = draw.maxTurns;
     draw.score = { home: 2, away: 2 };
 
     const presentation = buildPresentation({
@@ -299,7 +299,7 @@ describe("buildPresentation", () => {
       gameState: draw,
     });
 
-    expect(presentation.turnText).toBe("60 / 60 행동 · HOME 3/3");
+    expect(presentation.turnText).toBe("40 / 40 수 · HOME 3/3");
     expect(presentation.status).toBe("무승부입니다.");
   });
 
@@ -353,7 +353,7 @@ describe("createRenderer", () => {
 
     expect(refs.scoreHome.textContent).toBe("0");
     expect(refs.scoreAway.textContent).toBe("0");
-    expect(refs.turnInfo.textContent).toBe("0 / 60 행동 · HOME 3/3");
+    expect(refs.turnInfo.textContent).toBe("0 / 40 수 · HOME 3/3");
     expect(refs.statusMessage.textContent).toBe("내 차례입니다.");
     expect(startButton.hidden).toBe(true);
     expect(newGameButton.hidden).toBe(true);
@@ -666,14 +666,14 @@ describe("이벤트 로그 문구", () => {
       events: [
         { team: "home", kind: "pass", chancePercent: 100 },
         { team: "away", kind: "shotSaved", chancePercent: 35 },
-        { team: "home", kind: "steal" },
+        { team: "home", kind: "steal", chancePercent: 65 },
       ],
     });
 
     expect(presentation.eventLines).toEqual([
       "HOME 패스 100% → 연결",
       "AWAY 슛 35% → 선방!",
-      "HOME 스틸!",
+      "HOME 스틸 65% → 성공",
     ]);
   });
 

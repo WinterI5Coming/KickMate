@@ -24,103 +24,24 @@
       body {
         margin: 0;
         min-height: 100vh;
-        padding: 20px 24px 32px;
+        padding: 18px 20px 28px;
         color: var(--chalk);
         background:
           radial-gradient(1200px 500px at 50% -10%, #2b4a2555, transparent 70%),
           linear-gradient(180deg, #131a0e 0%, #0c110a 60%, #090d08 100%);
         font-family: "Segoe UI", system-ui, sans-serif;
       }
+      /* 좌측 경기장 + 우측 사이드바 2열 레이아웃. 좁은 화면에서는 세로로 쌓인다. */
       #app {
         display: grid;
-        gap: 14px;
-        width: min(1200px, 100%);
+        grid-template-columns: minmax(0, 1fr) 330px;
+        gap: 16px;
+        align-items: start;
+        width: min(1720px, 100%);
         margin: 0 auto;
       }
-      h1.brand {
-        margin: 0;
-        text-align: center;
-        font-family: "Bebas Neue", "Segoe UI", system-ui, sans-serif;
-        font-size: 1.9rem;
-        font-weight: 400;
-        letter-spacing: 0.35em;
-        text-transform: uppercase;
-        color: var(--gold);
-        text-shadow: 0 2px 12px #00000088;
-      }
-      h1.brand small {
-        display: block;
-        margin-top: 2px;
-        font-size: 0.62rem;
-        font-weight: 500;
-        letter-spacing: 0.28em;
-        color: var(--chalk);
-        opacity: 0.55;
-      }
-      #match-info {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        justify-content: center;
-        gap: 10px 22px;
-        padding: 10px 20px;
-        border: 1px solid var(--panel-line);
-        border-radius: 14px;
-        background: var(--panel);
-        box-shadow: 0 10px 30px #00000066;
-        font-size: 1.05rem;
-      }
-      #match-info .team {
-        display: inline-flex;
-        align-items: center;
-        gap: 10px;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-      }
-      #match-info .team::before {
-        content: "";
-        width: 14px;
-        height: 14px;
-        border-radius: 50%;
-        box-shadow: 0 0 0 2px #00000055 inset, 0 0 10px currentColor;
-      }
-      #match-info .team.home { color: #7fb2ff; }
-      #match-info .team.home::before { background: var(--home); }
-      #match-info .team.away { color: #ff9d9d; }
-      #match-info .team.away::before { background: var(--away); }
-      #match-info strong {
-        min-width: 1.4em;
-        text-align: center;
-        font-family: "Bebas Neue", "Segoe UI", system-ui, sans-serif;
-        font-size: 2.1rem;
-        font-weight: 400;
-        color: var(--chalk);
-        text-shadow: 0 2px 8px #000000aa;
-      }
-      #match-info .vs {
-        font-size: 0.8rem;
-        font-weight: 700;
-        letter-spacing: 0.2em;
-        opacity: 0.45;
-      }
-      #turn-info {
-        padding: 4px 14px;
-        border: 1px solid var(--panel-line);
-        border-radius: 999px;
-        background: #00000044;
-        font-size: 0.86rem;
-        letter-spacing: 0.02em;
-        opacity: 0.9;
-      }
-      #status-message {
-        min-height: 1.6em;
-        margin: 0;
-        text-align: center;
-        font-size: 1.02rem;
-        font-weight: 600;
-        letter-spacing: 0.02em;
-        color: var(--gold);
-        text-shadow: 0 1px 6px #00000099;
+      @media (max-width: 980px) {
+        #app { grid-template-columns: minmax(0, 1fr); }
       }
       .pitch-frame {
         padding: 10px;
@@ -135,15 +56,109 @@
         height: auto;
         border-radius: 10px;
       }
+      .sidebar {
+        display: grid;
+        gap: 12px;
+        align-content: start;
+      }
+      h1.brand {
+        margin: 0;
+        text-align: center;
+        font-family: "Bebas Neue", "Segoe UI", system-ui, sans-serif;
+        font-size: 1.7rem;
+        font-weight: 400;
+        letter-spacing: 0.3em;
+        text-transform: uppercase;
+        color: var(--gold);
+        text-shadow: 0 2px 12px #00000088;
+      }
+      h1.brand small {
+        display: block;
+        margin-top: 2px;
+        font-size: 0.58rem;
+        font-weight: 500;
+        letter-spacing: 0.26em;
+        color: var(--chalk);
+        opacity: 0.55;
+      }
+      .panel {
+        padding: 12px 14px;
+        border: 1px solid var(--panel-line);
+        border-radius: 14px;
+        background: var(--panel);
+        box-shadow: 0 10px 30px #00000055;
+      }
+      #match-info {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: center;
+        gap: 8px 16px;
+        font-size: 1rem;
+      }
+      #match-info .team {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+      }
+      #match-info .team::before {
+        content: "";
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        box-shadow: 0 0 0 2px #00000055 inset, 0 0 10px currentColor;
+      }
+      #match-info .team.home { color: #7fb2ff; }
+      #match-info .team.home::before { background: var(--home); }
+      #match-info .team.away { color: #ff9d9d; }
+      #match-info .team.away::before { background: var(--away); }
+      #match-info strong {
+        min-width: 1.3em;
+        text-align: center;
+        font-family: "Bebas Neue", "Segoe UI", system-ui, sans-serif;
+        font-size: 1.9rem;
+        font-weight: 400;
+        color: var(--chalk);
+        text-shadow: 0 2px 8px #000000aa;
+      }
+      #match-info .vs {
+        font-size: 0.75rem;
+        font-weight: 700;
+        letter-spacing: 0.2em;
+        opacity: 0.45;
+      }
+      #turn-info {
+        flex-basis: 100%;
+        text-align: center;
+        padding: 3px 12px;
+        border: 1px solid var(--panel-line);
+        border-radius: 999px;
+        background: #00000044;
+        font-size: 0.82rem;
+        letter-spacing: 0.02em;
+        opacity: 0.9;
+      }
+      #status-message {
+        min-height: 1.6em;
+        margin: 0;
+        text-align: center;
+        font-size: 0.98rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        color: var(--gold);
+        text-shadow: 0 1px 6px #00000099;
+      }
       #actions {
         display: flex;
         flex-wrap: wrap;
         justify-content: center;
-        gap: 10px;
+        gap: 8px;
       }
       button {
-        min-width: 104px;
-        padding: 11px 20px;
+        min-width: 92px;
+        padding: 10px 16px;
         border: 1px solid var(--panel-line);
         border-radius: 999px;
         color: var(--chalk);
@@ -176,19 +191,6 @@
         0%, 100% { box-shadow: 0 4px 14px #00000066; }
         50% { box-shadow: 0 0 0 4px #4dd0e144, 0 4px 14px #00000066; }
       }
-      #event-log {
-        margin: 0 auto;
-        padding: 10px 18px;
-        width: min(560px, 100%);
-        border: 1px solid var(--panel-line);
-        border-radius: 12px;
-        background: var(--panel);
-        font-size: 0.84rem;
-        line-height: 1.7;
-        letter-spacing: 0.02em;
-        white-space: pre-line;
-        opacity: 0.88;
-      }
       #end-turn { border-color: #ff5c5c55; }
       #tactic-panel {
         display: grid;
@@ -200,19 +202,20 @@
         flex-wrap: wrap;
         align-items: center;
         justify-content: center;
-        gap: 8px;
+        gap: 6px;
       }
       .tactic-label {
-        min-width: 64px;
-        font-size: 0.85rem;
+        flex-basis: 100%;
+        text-align: center;
+        font-size: 0.82rem;
         font-weight: 700;
         letter-spacing: 0.06em;
         opacity: 0.7;
       }
       button.tactic {
-        min-width: 92px;
-        padding: 8px 14px;
-        font-size: 0.9rem;
+        min-width: 0;
+        padding: 7px 12px;
+        font-size: 0.85rem;
       }
       button.tactic[aria-pressed="true"] {
         border-color: var(--gold);
@@ -221,19 +224,28 @@
       }
       #start-game,
       #new-game {
-        justify-self: center;
-        min-width: 200px;
-        padding: 14px 34px;
+        justify-self: stretch;
+        padding: 13px 30px;
         border-color: var(--gold);
         color: #131a0e;
         background: linear-gradient(180deg, #ffd166, #f0b93e);
-        font-size: 1.06rem;
+        font-size: 1.02rem;
         letter-spacing: 0.12em;
+      }
+      #event-log {
+        margin: 0;
+        min-height: 3.2em;
+        font-size: 0.83rem;
+        line-height: 1.75;
+        letter-spacing: 0.02em;
+        white-space: pre-line;
+        opacity: 0.9;
       }
       footer.hint {
         margin: 0;
         text-align: center;
-        font-size: 0.78rem;
+        font-size: 0.74rem;
+        line-height: 1.6;
         letter-spacing: 0.03em;
         opacity: 0.45;
       }
@@ -241,44 +253,49 @@
   </head>
   <body>
     <main id="app">
-      <h1 class="brand">KickMate<small>3행동 턴제 축구</small></h1>
-      <section id="match-info" aria-live="polite">
-        <span class="team home">HOME <strong id="score-home">0</strong></span>
-        <span class="vs">VS</span>
-        <span class="team away"><strong id="score-away">0</strong> AWAY</span>
-        <span id="turn-info">0 / 60 ply</span>
-      </section>
-      <p id="status-message" role="status">게임을 시작하세요.</p>
       <div class="pitch-frame">
         <canvas id="board" width="1200" height="720" aria-label="KickMate 경기장"></canvas>
       </div>
-      <section id="event-log" aria-label="경기 기록" aria-live="polite" hidden></section>
-      <section id="actions" aria-label="기물 행동">
-        <button id="action-move" type="button" hidden>이동</button>
-        <button id="action-pass" type="button" hidden>패스</button>
-        <button id="action-shoot" type="button" hidden>슛</button>
-        <button id="action-hold" type="button" hidden>버티기</button>
-        <button id="end-turn" type="button" hidden>턴 종료</button>
-      </section>
-      <section id="tactic-panel" aria-label="전술 선택">
-        <div class="tactic-group">
-          <span class="tactic-label">내 전술</span>
-          <button id="tactic-home-balanced" type="button" class="tactic" aria-pressed="true">밸런스</button>
-          <button id="tactic-home-tikitaka" type="button" class="tactic" aria-pressed="false">티키타카</button>
-          <button id="tactic-home-counter" type="button" class="tactic" aria-pressed="false">역습축구</button>
-          <button id="tactic-home-gegenpress" type="button" class="tactic" aria-pressed="false">게겐프레싱</button>
-        </div>
-        <div class="tactic-group">
-          <span class="tactic-label">봇 전술</span>
-          <button id="tactic-away-balanced" type="button" class="tactic" aria-pressed="true">밸런스</button>
-          <button id="tactic-away-tikitaka" type="button" class="tactic" aria-pressed="false">티키타카</button>
-          <button id="tactic-away-counter" type="button" class="tactic" aria-pressed="false">역습축구</button>
-          <button id="tactic-away-gegenpress" type="button" class="tactic" aria-pressed="false">게겐프레싱</button>
-        </div>
-      </section>
-      <button id="start-game" type="button">게임 시작</button>
-      <button id="new-game" type="button" hidden>새 게임</button>
-      <footer class="hint">내 기물 클릭 → 행동 선택 · 상대 공 소유자 클릭 = 스틸 · 분홍 레인 = 상대 슛 위협</footer>
+      <aside class="sidebar">
+        <h1 class="brand">KickMate<small>3행동 턴제 축구</small></h1>
+        <section id="match-info" class="panel" aria-live="polite">
+          <span class="team home">HOME <strong id="score-home">0</strong></span>
+          <span class="vs">VS</span>
+          <span class="team away"><strong id="score-away">0</strong> AWAY</span>
+          <span id="turn-info">0 / 40 수</span>
+        </section>
+        <p id="status-message" role="status">게임을 시작하세요.</p>
+        <section id="actions" aria-label="기물 행동">
+          <button id="action-move" type="button" hidden>이동</button>
+          <button id="action-pass" type="button" hidden>패스</button>
+          <button id="action-shoot" type="button" hidden>슛</button>
+          <button id="action-hold" type="button" hidden>버티기</button>
+          <button id="end-turn" type="button" hidden>턴 종료</button>
+        </section>
+        <section id="tactic-panel" class="panel" aria-label="전술 선택">
+          <div class="tactic-group">
+            <span class="tactic-label">내 전술</span>
+            <button id="tactic-home-balanced" type="button" class="tactic" aria-pressed="true">밸런스</button>
+            <button id="tactic-home-tikitaka" type="button" class="tactic" aria-pressed="false">티키타카</button>
+            <button id="tactic-home-counter" type="button" class="tactic" aria-pressed="false">역습축구</button>
+            <button id="tactic-home-gegenpress" type="button" class="tactic" aria-pressed="false">게겐프레싱</button>
+          </div>
+          <div class="tactic-group">
+            <span class="tactic-label">봇 전술</span>
+            <button id="tactic-away-balanced" type="button" class="tactic" aria-pressed="true">밸런스</button>
+            <button id="tactic-away-tikitaka" type="button" class="tactic" aria-pressed="false">티키타카</button>
+            <button id="tactic-away-counter" type="button" class="tactic" aria-pressed="false">역습축구</button>
+            <button id="tactic-away-gegenpress" type="button" class="tactic" aria-pressed="false">게겐프레싱</button>
+          </div>
+        </section>
+        <button id="start-game" type="button">게임 시작</button>
+        <button id="new-game" type="button" hidden>새 게임</button>
+        <section id="event-log" class="panel" aria-label="경기 기록" aria-live="polite" hidden></section>
+        <footer class="hint">
+          내 선수 클릭 → 대상 클릭으로 즉시 실행<br />
+          상대 공 소유자 클릭 = 스틸 · 분홍 레인 = 상대 슛 위협
+        </footer>
+      </aside>
     </main>
     <script type="module" src="/src/client/main.ts"></script>
   </body>

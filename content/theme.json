@@ -23,10 +23,13 @@
     "pressured": "#ff9f43",
     "heldFirm": "#4dd0e1",
     "rebound": "#ffd166",
-    "threat": "#ff8fa3"
+    "threat": "#ff8fa3",
+    "skin": "#e8bd8f"
   },
   "team": {
     "home": "#1f5fbf",
-    "away": "#c03434"
+    "homeDark": "#143c7d",
+    "away": "#c03434",
+    "awayDark": "#7c1f1f"
   }
 }

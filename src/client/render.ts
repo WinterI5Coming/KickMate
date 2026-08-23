@@ -16,7 +16,16 @@ import {
   type MovePreview,
   type Pos,
 } from "../engine/types";
-import { BOARD_GEOMETRY, isTargetedMove, targetForMove } from "./input";
+import {
+  BOARD_GEOMETRY,
+  boardScaleAt,
+  isTargetedMove,
+  projectCellCenter,
+  projectGoalCenter,
+  projectPoint,
+  targetForMove,
+  unprojectPoint,
+} from "./input";
 import type { CanvasTarget, ClientAction, ClientMessage, ClientViewState } from "./types";
 
 /** DOM에 표시할 값만 추린 상태 독립적인 표시 모델. */
@@ -161,31 +170,89 @@ export function buildPresentation(state: ClientViewState): Presentation {
   };
 }
 
+/** 보드 칸의 바닥 중심 픽셀. 투영 계층의 이름을 렌더러 관례에 맞춰 재사용한다. */
 function cellCenter(pos: Pos): { x: number; y: number } {
-  return {
-    x: BOARD_GEOMETRY.originX + pos.x * BOARD_GEOMETRY.cell + BOARD_GEOMETRY.cell / 2,
-    y: BOARD_GEOMETRY.originY + pos.y * BOARD_GEOMETRY.cell + BOARD_GEOMETRY.cell / 2,
-  };
+  return projectCellCenter(pos);
+}
+
+/** 해당 칸에 서 있는 기물 토큰의 화면 반지름. 멀수록 작아진다. */
+export function tokenRadius(pos: Pos): number {
+  return BOARD_GEOMETRY.cell * 0.35 * boardScaleAt(pos.y + 0.5);
+}
+
+/** 기물 토큰의 화면 중심. 바닥 중심에서 높이감만큼 띄운다. */
+export function pieceTokenCenter(pos: Pos): { x: number; y: number } {
+  const ground = projectCellCenter(pos);
+  return { x: ground.x, y: ground.y - tokenRadius(pos) * 0.55 };
 }
 
 function targetCenter(target: CanvasTarget): { x: number; y: number } | null {
   if (target.kind === "cell") return cellCenter(target.pos);
-  if (target.kind === "goal") {
-    return {
-      x:
-        target.side === "left"
-          ? BOARD_GEOMETRY.originX / 2
-          : BOARD_GEOMETRY.boardRight + BOARD_GEOMETRY.originX / 2,
-      y: target.row * BOARD_GEOMETRY.cell + BOARD_GEOMETRY.cell / 2,
-    };
-  }
+  if (target.kind === "goal") return projectGoalCenter(target.side, target.row);
   return null;
+}
+
+/** 대상이 기물이 서 있는 칸이면 토큰 중심을, 아니면 바닥 중심을 반환한다. */
+function targetScreenCenter(
+  gameState: GameState,
+  target: CanvasTarget,
+): { x: number; y: number } | null {
+  if (target.kind === "cell") {
+    const occupant = gameState.pieces.find(
+      (piece) => piece.pos.x === target.pos.x && piece.pos.y === target.pos.y,
+    );
+    return occupant ? pieceTokenCenter(occupant.pos) : cellCenter(target.pos);
+  }
+  return targetCenter(target);
 }
 
 /** 미리보기의 실제 수신자·차단자 ID를 Canvas 칸으로만 해석한다. */
 function pieceTarget(gameState: GameState, pieceId: number): CanvasTarget | null {
   const piece = gameState.pieces.find((candidate) => candidate.id === pieceId);
   return piece ? { kind: "cell", pos: { ...piece.pos } } : null;
+}
+
+/** 논리 사각형(칸 단위)의 네 꼭짓점을 투영한 사다리꼴 경로를 만든다. */
+function traceQuad(
+  context: CanvasRenderingContext2D,
+  fx0: number,
+  fy0: number,
+  fx1: number,
+  fy1: number,
+): void {
+  const a = projectPoint(fx0, fy0);
+  const b = projectPoint(fx1, fy0);
+  const c = projectPoint(fx1, fy1);
+  const d = projectPoint(fx0, fy1);
+  context.beginPath();
+  context.moveTo(a.x, a.y);
+  context.lineTo(b.x, b.y);
+  context.lineTo(c.x, c.y);
+  context.lineTo(d.x, d.y);
+  context.lineTo(a.x, a.y);
+}
+
+/** 원근이 적용된 보드 칸 하나를 채운다. */
+function fillCellQuad(context: CanvasRenderingContext2D, pos: Pos, color: string): void {
+  traceQuad(context, pos.x, pos.y, pos.x + 1, pos.y + 1);
+  context.fillStyle = color;
+  context.fill();
+}
+
+/** 두 논리 좌표를 잇는 선을 투영해 그린다. */
+function strokeBoardLine(
+  context: CanvasRenderingContext2D,
+  fx0: number,
+  fy0: number,
+  fx1: number,
+  fy1: number,
+): void {
+  const from = projectPoint(fx0, fy0);
+  const to = projectPoint(fx1, fy1);
+  context.beginPath();
+  context.moveTo(from.x, from.y);
+  context.lineTo(to.x, to.y);
+  context.stroke();
 }
 
 function fillCircle(
@@ -216,87 +283,256 @@ function strokeCircle(
   context.stroke();
 }
 
-/** 한쪽 골대 여백에 골문 그물과 프레임을 그린다. */
-function drawGoalMouth(context: CanvasRenderingContext2D, side: "left" | "right"): void {
-  const { cell, originX, boardRight } = BOARD_GEOMETRY;
-  const x0 = side === "left" ? 10 : boardRight + 6;
-  const width = originX - 16;
-  const y0 = 3 * cell;
-  const height = 3 * cell;
-
-  context.fillStyle = theme.board.stadium;
-  context.globalAlpha = 0.6;
-  context.fillRect(x0, y0, width, height);
-  context.globalAlpha = 1;
-
-  // 그물: 성긴 세로·가로 줄
-  context.strokeStyle = theme.board.net;
-  context.globalAlpha = 0.45;
-  context.lineWidth = 1;
-  for (let x = x0 + 12; x < x0 + width; x += 16) {
-    context.beginPath();
-    context.moveTo(x, y0);
-    context.lineTo(x, y0 + height);
-    context.stroke();
-  }
-  for (let y = y0 + 16; y < y0 + height; y += 16) {
-    context.beginPath();
-    context.moveTo(x0, y);
-    context.lineTo(x0 + width, y);
-    context.stroke();
-  }
-  context.globalAlpha = 1;
-
-  // 골대 프레임
-  context.strokeStyle = theme.board.chalk;
-  context.lineWidth = 5;
-  context.strokeRect(x0, y0, width, height);
+/** 그라디언트·텍스처를 그릴 수 있는 실제 브라우저 컨텍스트인지 판별한다. 테스트 대역에서는 false다. */
+function supportsFancyPaint(context: CanvasRenderingContext2D): boolean {
+  return typeof context.createLinearGradient === "function";
 }
 
-/** 관중석, 잔디 스트라이프, 석회 라인과 양쪽 골문을 매 프레임 처음부터 다시 그린다. */
-function drawPitch(context: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
-  const { cell, originX, originY, boardRight } = BOARD_GEOMETRY;
-  const pitchWidth = BOARD_W * cell;
-  const pitchHeight = BOARD_H * cell;
-  const centerX = originX + pitchWidth / 2;
+/** 결정적 의사난수 생성기. 배경 텍스처가 매 실행 같은 모양이 되게 한다. */
+function createRandom(seedInit: number): () => number {
+  let seed = seedInit >>> 0;
+  return () => {
+    seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+    return seed / 0x1_0000_0000;
+  };
+}
 
-  // 경기장 밖 관중석 어둠
+/** 관중석: 어두운 상하 그라디언트 위에 관중처럼 보이는 색 점을 흩뿌린다. */
+function drawStands(
+  context: CanvasRenderingContext2D,
+  canvas: { width: number; height: number },
+): void {
   context.fillStyle = theme.board.stadium;
   context.fillRect(0, 0, canvas.width, canvas.height);
+  if (!supportsFancyPaint(context)) return;
 
-  // 잔디: 열마다 명암을 교차하는 스트라이프
-  for (let x = 0; x < BOARD_W; x += 1) {
-    context.fillStyle = x % 2 === 0 ? theme.board.grassLight : theme.board.grassDark;
-    context.fillRect(originX + x * cell, originY, cell, pitchHeight);
+  const backdrop = context.createLinearGradient(0, 0, 0, canvas.height);
+  backdrop.addColorStop(0, "rgba(58, 74, 46, 0.55)");
+  backdrop.addColorStop(0.4, "rgba(20, 27, 14, 0.2)");
+  backdrop.addColorStop(1, "rgba(0, 0, 0, 0.4)");
+  context.fillStyle = backdrop;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  // 경기장·골대 영역을 피해서 관중 점을 뿌린다.
+  const random = createRandom(0x5eed);
+  const crowdColors = ["#c9c2b4", "#8f9aa8", "#b08c6e", "#6f7d5a", "#a06a6a", "#5d6f8f"];
+  for (let index = 0; index < 1600; index += 1) {
+    const px = random() * canvas.width;
+    const py = random() * canvas.height;
+    const { fx, fy } = unprojectPoint(px, py);
+    if (fx > -1.4 && fx < BOARD_W + 1.4 && fy > -0.4 && fy < BOARD_H + 0.4) continue;
+    context.globalAlpha = 0.16 + random() * 0.2;
+    context.fillStyle = crowdColors[Math.floor(random() * crowdColors.length)]!;
+    context.fillRect(px, py, 2.4, 2.4);
   }
+  context.globalAlpha = 1;
+}
+
+/** 잔디 결, 깎기 밴드, 원근 대기감을 잔디 위에 얹는다. 실제 브라우저에서만 그린다. */
+function drawGrassDetail(context: CanvasRenderingContext2D): void {
+  if (!supportsFancyPaint(context)) return;
+
+  // 풀 결: 짧은 세로 획을 결정적 난수로 흩뿌린다. 가까울수록 길다.
+  const random = createRandom(0x6ea55);
+  for (let index = 0; index < 2400; index += 1) {
+    const fx = random() * BOARD_W;
+    const fy = random() * BOARD_H;
+    const point = projectPoint(fx, fy);
+    const scale = boardScaleAt(fy);
+    context.globalAlpha = 0.05 + random() * 0.07;
+    context.fillStyle = random() < 0.5 ? "#0c2e17" : "#a9e3bb";
+    context.fillRect(point.x, point.y, 1.2, 2.6 * scale);
+  }
+  context.globalAlpha = 1;
+
+  // 가로 깎기 밴드: 두 행마다 옅은 광택 띠를 얹어 기계로 깎은 잔디 느낌을 준다.
+  for (let row = 0; row < BOARD_H; row += 2) {
+    traceQuad(context, 0, row, BOARD_W, row + 1);
+    context.fillStyle = "#ffffff";
+    context.globalAlpha = 0.035;
+    context.fill();
+  }
+  context.globalAlpha = 1;
+
+  // 원근 대기감: 먼 쪽(위)은 어둡고 가까운 쪽은 살짝 밝아지는 세로 그라디언트.
+  const depth = context.createLinearGradient(
+    0,
+    BOARD_GEOMETRY.originY,
+    0,
+    BOARD_GEOMETRY.originY + BOARD_H * BOARD_GEOMETRY.rowH,
+  );
+  depth.addColorStop(0, "rgba(6, 12, 6, 0.36)");
+  depth.addColorStop(0.55, "rgba(6, 12, 6, 0.06)");
+  depth.addColorStop(1, "rgba(255, 255, 255, 0.05)");
+  traceQuad(context, 0, 0, BOARD_W, BOARD_H);
+  context.fillStyle = depth;
+  context.fill();
+}
+
+/** 화면 가장자리를 어둡게 눌러 조명이 중앙에 모인 경기장 분위기를 만든다. */
+function drawVignette(
+  context: CanvasRenderingContext2D,
+  canvas: { width: number; height: number },
+): void {
+  if (!supportsFancyPaint(context)) return;
+  const vignette = context.createRadialGradient(600, 350, 250, 600, 380, 760);
+  vignette.addColorStop(0, "rgba(0, 0, 0, 0)");
+  vignette.addColorStop(1, "rgba(0, 0, 0, 0.5)");
+  context.fillStyle = vignette;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+/** 한쪽 골대를 세로 포스트, 크로스바, 뒤로 기울어진 그물과 함께 입체로 그린다. */
+function drawGoal3D(context: CanvasRenderingContext2D, side: "left" | "right"): void {
+  const front = side === "left" ? 0 : BOARD_W;
+  const back = side === "left" ? -0.85 : BOARD_W + 0.85;
+  const height = BOARD_GEOMETRY.cell * 0.8 * boardScaleAt(4.5);
+
+  // 골문 바닥의 어두운 그물 영역
+  context.globalAlpha = 0.55;
+  traceQuad(context, Math.min(front, back), 3, Math.max(front, back), 6);
+  context.fillStyle = theme.board.stadium;
+  context.fill();
+  context.globalAlpha = 1;
+
+  const groundAt = (fy: number) => projectPoint(front, fy);
+  const topAt = (fy: number) => {
+    const point = projectPoint(front, fy);
+    return { x: point.x, y: point.y - height };
+  };
+
+  // 그물: 크로스바에서 바닥 뒤편으로 흘러내리는 세로줄과 가로줄
+  context.strokeStyle = theme.board.net;
+  context.globalAlpha = 0.5;
+  context.lineWidth = 1;
+  for (let step = 0; step <= 6; step += 1) {
+    const fy = 3 + step * 0.5;
+    const top = topAt(fy);
+    const backGround = projectPoint(back, fy);
+    context.beginPath();
+    context.moveTo(top.x, top.y);
+    context.lineTo(backGround.x, backGround.y);
+    context.stroke();
+  }
+  // 가로 그물: 크로스바와 바닥 사이를 일정 비율로 가로지르는 줄
+  for (const ratio of [0.3, 0.55, 0.8]) {
+    const leftTop = topAt(3);
+    const rightTop = topAt(6);
+    const leftBack = projectPoint(back, 3);
+    const rightBack = projectPoint(back, 6);
+    context.beginPath();
+    context.moveTo(
+      leftTop.x + (leftBack.x - leftTop.x) * ratio,
+      leftTop.y + (leftBack.y - leftTop.y) * ratio,
+    );
+    context.lineTo(
+      rightTop.x + (rightBack.x - rightTop.x) * ratio,
+      rightTop.y + (rightBack.y - rightTop.y) * ratio,
+    );
+    context.stroke();
+  }
+  strokeBoardLine(context, back, 3, back, 6);
+  context.globalAlpha = 1;
+
+  // 포스트 두 개와 크로스바. 어두운 선을 살짝 어긋나게 먼저 그려 둥근 기둥의 음영을 만든다.
+  for (const [color, offset, width] of [
+    ["#1c231a", 2.5, 6],
+    [theme.board.chalk, 0, 5],
+  ] as const) {
+    context.strokeStyle = color;
+    context.lineWidth = width;
+    for (const fy of [3, 6]) {
+      const ground = groundAt(fy);
+      const top = topAt(fy);
+      context.beginPath();
+      context.moveTo(ground.x + offset, ground.y);
+      context.lineTo(top.x + offset, top.y);
+      context.stroke();
+    }
+    const barLeft = topAt(3);
+    const barRight = topAt(6);
+    context.beginPath();
+    context.moveTo(barLeft.x + offset, barLeft.y + offset);
+    context.lineTo(barRight.x + offset, barRight.y + offset);
+    context.stroke();
+  }
+}
+
+/** 관중석, 원근 잔디 스트라이프, 석회 라인과 양쪽 입체 골문을 처음부터 그린다. */
+function drawPitch(
+  context: CanvasRenderingContext2D,
+  canvas: { width: number; height: number },
+): void {
+  drawStands(context, canvas);
+
+  // 잔디: 열마다 명암을 교차하는 사다리꼴 스트라이프
+  for (let x = 0; x < BOARD_W; x += 1) {
+    traceQuad(context, x, 0, x + 1, BOARD_H);
+    context.fillStyle = x % 2 === 0 ? theme.board.grassLight : theme.board.grassDark;
+    context.fill();
+  }
+  drawGrassDetail(context);
 
   // 게임 입력용 칸 경계는 아주 희미하게만 남긴다.
   context.strokeStyle = theme.board.chalk;
-  context.globalAlpha = 0.07;
+  context.globalAlpha = 0.08;
   context.lineWidth = 1;
-  for (let x = 0; x < BOARD_W; x += 1) {
-    for (let y = 0; y < BOARD_H; y += 1) {
-      context.strokeRect(originX + x * cell, originY + y * cell, cell, cell);
-    }
-  }
+  for (let x = 1; x < BOARD_W; x += 1) strokeBoardLine(context, x, 0, x, BOARD_H);
+  for (let y = 1; y < BOARD_H; y += 1) strokeBoardLine(context, 0, y, BOARD_W, y);
   context.globalAlpha = 1;
 
   // 석회 라인: 외곽, 센터라인, 센터서클, 양쪽 페널티 박스(GK 박스 영역과 일치)
   context.strokeStyle = theme.board.chalk;
   context.globalAlpha = 0.8;
   context.lineWidth = 3;
-  context.strokeRect(originX, originY, pitchWidth, pitchHeight);
-  context.beginPath();
-  context.moveTo(centerX, originY);
-  context.lineTo(centerX, originY + pitchHeight);
+  traceQuad(context, 0, 0, BOARD_W, BOARD_H);
   context.stroke();
-  strokeCircle(context, centerX, originY + pitchHeight / 2, cell * 1.35, theme.board.chalk, 3);
-  context.strokeRect(originX, 2 * cell, 2 * cell, 5 * cell);
-  context.strokeRect(boardRight - 2 * cell, 2 * cell, 2 * cell, 5 * cell);
+  strokeBoardLine(context, BOARD_W / 2, 0, BOARD_W / 2, BOARD_H);
+  // 센터서클은 논리 원을 촘촘한 선분으로 투영해 원근에 맞는 타원이 되게 한다.
+  context.beginPath();
+  for (let step = 0; step <= 32; step += 1) {
+    const angle = (step / 32) * Math.PI * 2;
+    const point = projectPoint(
+      BOARD_W / 2 + Math.cos(angle) * 1.3,
+      BOARD_H / 2 + Math.sin(angle) * 1.3,
+    );
+    if (step === 0) context.moveTo(point.x, point.y);
+    else context.lineTo(point.x, point.y);
+  }
+  context.stroke();
+  traceQuad(context, 0, 2, 2, 7);
+  context.stroke();
+  traceQuad(context, BOARD_W - 2, 2, BOARD_W, 7);
+  context.stroke();
   context.globalAlpha = 1;
 
-  drawGoalMouth(context, "left");
-  drawGoalMouth(context, "right");
+  drawGoal3D(context, "left");
+  drawGoal3D(context, "right");
+  drawVignette(context, canvas);
+}
+
+/** 정적 배경을 오프스크린 캔버스에 한 번만 그려두고 매 프레임 복사한다. */
+let staticBackground: HTMLCanvasElement | null = null;
+
+function drawBackground(context: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
+  if (typeof document === "undefined" || typeof context.drawImage !== "function") {
+    // 테스트 대역처럼 오프스크린을 만들 수 없는 환경에서는 직접 그린다.
+    drawPitch(context, canvas);
+    return;
+  }
+  if (!staticBackground) {
+    const layer = document.createElement("canvas");
+    layer.width = BOARD_GEOMETRY.canvasWidth;
+    layer.height = BOARD_GEOMETRY.canvasHeight;
+    const layerContext = layer.getContext("2d");
+    if (!layerContext) {
+      drawPitch(context, canvas);
+      return;
+    }
+    drawPitch(layerContext, layer);
+    staticBackground = layer;
+  }
+  context.drawImage(staticBackground, 0, 0);
 }
 
 /** 직전 수의 출발점과 도착점을 선으로 연결해 한 수 전의 변화를 보존한다. */
@@ -318,35 +554,35 @@ function drawLastMove(context: CanvasRenderingContext2D, state: ClientViewState)
 function drawPreviewPath(
   context: CanvasRenderingContext2D,
   actor: Pos,
-  resolvedTarget: CanvasTarget,
+  resolvedTarget: { x: number; y: number } | null,
   preview: Extract<MovePreview, { kind: "pass" | "shoot" }>,
+  detailed: boolean,
 ): void {
   const chance = preview.kind === "pass" ? preview.arrivalChance : preview.goalChance;
   const successful = preview.kind === "pass" ? preview.reachesTarget : chance >= 1;
   const color = successful ? theme.board.pathSuccess : theme.board.pathBlocked;
 
-  context.fillStyle = color;
-  context.globalAlpha = 0.22;
-  for (const pos of preview.path) {
-    context.fillRect(
-      BOARD_GEOMETRY.originX + pos.x * BOARD_GEOMETRY.cell,
-      BOARD_GEOMETRY.originY + pos.y * BOARD_GEOMETRY.cell,
-      BOARD_GEOMETRY.cell,
-      BOARD_GEOMETRY.cell,
-    );
+  // 모든 후보를 한 번에 보여주는 기본 모드에서는 칸 채우기를 생략해 화면을 가볍게 유지한다.
+  if (detailed) {
+    context.globalAlpha = 0.22;
+    for (const pos of preview.path) {
+      fillCellQuad(context, pos, color);
+    }
+    context.globalAlpha = 1;
   }
-  context.globalAlpha = 1;
 
-  const from = cellCenter(actor);
-  const to = targetCenter(resolvedTarget);
+  const from = pieceTokenCenter(actor);
+  const to = resolvedTarget;
   if (!to) return;
   context.strokeStyle = color;
   context.setLineDash([]);
-  context.lineWidth = 5;
+  context.lineWidth = detailed ? 5 : 3;
+  context.globalAlpha = detailed ? 1 : 0.75;
   context.beginPath();
   context.moveTo(from.x, from.y);
   context.lineTo(to.x, to.y);
   context.stroke();
+  context.globalAlpha = 1;
   context.fillStyle = color;
   context.font = `bold ${Math.floor(BOARD_GEOMETRY.cell * 0.32)}px sans-serif`;
   context.textAlign = "center";
@@ -364,22 +600,15 @@ function drawThreatLanes(context: CanvasRenderingContext2D, state: ClientViewSta
   for (const { preview } of state.threatShots) {
     if (preview.kind !== "shoot") continue;
 
-    context.fillStyle = theme.board.threat;
     // 득점 확률이 높은 위협 레인일수록 진하게 칠해 어디를 먼저 막을지 알 수 있게 한다.
     context.globalAlpha = 0.08 + preview.goalChance * 0.25;
     for (const pos of preview.path) {
-      context.fillRect(
-        BOARD_GEOMETRY.originX + pos.x * BOARD_GEOMETRY.cell,
-        BOARD_GEOMETRY.originY + pos.y * BOARD_GEOMETRY.cell,
-        BOARD_GEOMETRY.cell,
-        BOARD_GEOMETRY.cell,
-      );
+      fillCellQuad(context, pos, theme.board.threat);
     }
     context.globalAlpha = 1;
 
     // away는 왼쪽 골문을 공격하므로 위협 확률은 왼쪽 골문 칸 옆에 표기한다.
-    const label = targetCenter({ kind: "goal", side: "left", row: preview.goalRow });
-    if (!label) continue;
+    const label = projectGoalCenter("left", preview.goalRow);
     context.fillStyle = theme.board.threat;
     context.font = `bold ${Math.floor(BOARD_GEOMETRY.cell * 0.26)}px sans-serif`;
     context.textAlign = "center";
@@ -407,7 +636,15 @@ function drawPreviewPaths(
         : preview.outcome !== "goal" && preview.blockerPieceId !== null
           ? pieceTarget(gameState, preview.blockerPieceId)
           : targetForMove(gameState, move);
-    if (resolvedTarget) drawPreviewPath(context, actor.pos, resolvedTarget, preview);
+    if (resolvedTarget) {
+      drawPreviewPath(
+        context,
+        actor.pos,
+        targetScreenCenter(gameState, resolvedTarget),
+        preview,
+        state.selectedAction !== null,
+      );
+    }
   }
 }
 
@@ -420,7 +657,7 @@ function drawCandidates(
   for (const move of state.candidateMoves) {
     if (!isTargetedMove(move)) continue;
     const target = targetForMove(gameState, move);
-    const center = targetCenter(target);
+    const center = targetScreenCenter(gameState, target);
     if (!center) continue;
 
     if (move.kind === "steal") {
@@ -428,12 +665,14 @@ function drawCandidates(
         state.selectedStealTargetId === null
           ? null
           : gameState.pieces.find((piece) => piece.id === move.pieceId);
-      const stealCenter = stealer ? cellCenter(stealer.pos) : center;
+      const ringPos =
+        stealer?.pos ?? (target.kind === "cell" ? target.pos : null);
+      const ringCenter = stealer ? pieceTokenCenter(stealer.pos) : center;
       strokeCircle(
         context,
-        stealCenter.x,
-        stealCenter.y,
-        BOARD_GEOMETRY.cell * 0.4,
+        ringCenter.x,
+        ringCenter.y,
+        ringPos ? tokenRadius(ringPos) + 6 : BOARD_GEOMETRY.cell * 0.4,
         theme.board.stealTarget,
         6,
       );
@@ -452,7 +691,7 @@ function drawCandidates(
         context,
         center.x,
         center.y,
-        BOARD_GEOMETRY.cell * 0.4,
+        tokenRadius(target.pos) + 6,
         theme.board.passTarget,
         6,
       );
@@ -465,7 +704,8 @@ function drawCandidates(
         : move.kind === "pass"
           ? theme.board.passTarget
           : theme.board.shootTarget;
-    fillCircle(context, center.x, center.y, BOARD_GEOMETRY.cell * 0.13, color);
+    const dotScale = target.kind === "cell" ? boardScaleAt(target.pos.y + 0.5) : 1;
+    fillCircle(context, center.x, center.y, BOARD_GEOMETRY.cell * 0.13 * dotScale, color);
   }
 }
 
@@ -478,8 +718,9 @@ function drawOutcomeHighlights(
   for (const { preview } of state.candidatePreviews) {
     if (preview.kind === "shoot" && preview.outcome === "fieldRebound" && preview.reboundPos) {
       const rebound = cellCenter(preview.reboundPos);
-      strokeCircle(context, rebound.x, rebound.y, BOARD_GEOMETRY.cell * 0.24, theme.board.rebound, 5);
-      strokeCircle(context, rebound.x, rebound.y, BOARD_GEOMETRY.cell * 0.32, theme.board.rebound, 3);
+      const scale = boardScaleAt(preview.reboundPos.y + 0.5);
+      strokeCircle(context, rebound.x, rebound.y, BOARD_GEOMETRY.cell * 0.24 * scale, theme.board.rebound, 5);
+      strokeCircle(context, rebound.x, rebound.y, BOARD_GEOMETRY.cell * 0.32 * scale, theme.board.rebound, 3);
     }
     const pieceId =
       preview.kind === "pass"
@@ -488,25 +729,14 @@ function drawOutcomeHighlights(
           ? preview.blockerPieceId
           : null;
     if (pieceId === null) continue;
+    // 수신자·차단자 이중 강조는 행동을 좁혀 본 상세 모드에서만 그려 화면을 가볍게 유지한다.
+    if (state.selectedAction === null) continue;
     const piece = gameState.pieces.find((candidate) => candidate.id === pieceId);
     if (!piece) continue;
-    const center = cellCenter(piece.pos);
-    strokeCircle(
-      context,
-      center.x,
-      center.y,
-      BOARD_GEOMETRY.cell * 0.43,
-      theme.board.actualReceiver,
-      4,
-    );
-    strokeCircle(
-      context,
-      center.x,
-      center.y,
-      BOARD_GEOMETRY.cell * 0.49,
-      theme.board.actualReceiver,
-      3,
-    );
+    const center = pieceTokenCenter(piece.pos);
+    const radius = tokenRadius(piece.pos);
+    strokeCircle(context, center.x, center.y, radius + 7, theme.board.actualReceiver, 4);
+    strokeCircle(context, center.x, center.y, radius + 12, theme.board.actualReceiver, 3);
   }
 
   if (
@@ -521,12 +751,12 @@ function drawOutcomeHighlights(
     const carrierId = gameState.ball.pieceId;
     const carrier = gameState.pieces.find((piece) => piece.id === carrierId);
     if (!carrier) return;
-    const center = cellCenter(carrier.pos);
+    const center = pieceTokenCenter(carrier.pos);
     context.fillStyle = theme.board.protected;
     context.font = `bold ${Math.floor(BOARD_GEOMETRY.cell * 0.3)}px sans-serif`;
     context.textAlign = "center";
     context.textBaseline = "middle";
-    context.fillText("◆", center.x, center.y - BOARD_GEOMETRY.cell * 0.3);
+    context.fillText("◆", center.x, center.y - tokenRadius(carrier.pos) - 10);
   }
 }
 
@@ -555,9 +785,159 @@ function drawBall(
   fillCircle(context, x + radius * 0.2, y + radius * 0.35, radius, "#000000");
   context.globalAlpha = 1;
   fillCircle(context, x, y, radius, theme.board.ball);
-  context.globalAlpha = 0.55;
-  fillCircle(context, x, y, radius * 0.34, theme.board.stadium);
+  // 클래식 축구공 패턴: 가운데 오각형 점과 주변 다섯 점
+  context.globalAlpha = 0.6;
+  fillCircle(context, x, y, radius * 0.3, "#1d221c");
+  for (let index = 0; index < 5; index += 1) {
+    const angle = -Math.PI / 2 + (index * Math.PI * 2) / 5;
+    fillCircle(
+      context,
+      x + Math.cos(angle) * radius * 0.72,
+      y + Math.sin(angle) * radius * 0.72,
+      radius * 0.18,
+      "#1d221c",
+    );
+  }
+  // 왼쪽 위 하이라이트
+  context.globalAlpha = 0.5;
+  fillCircle(context, x - radius * 0.32, y - radius * 0.32, radius * 0.22, "#ffffff");
   context.globalAlpha = 1;
+}
+
+/** 바닥 그림자를 납작한 타원으로 그린다. 타원을 지원하지 않는 환경에서는 원으로 대체한다. */
+function fillGroundShadow(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  radiusX: number,
+  radiusY: number,
+): void {
+  context.fillStyle = "#000000";
+  context.beginPath();
+  if (typeof context.ellipse === "function") {
+    context.ellipse(x, y, radiusX, radiusY, 0, 0, Math.PI * 2);
+  } else {
+    context.arc(x, y, radiusY, 0, Math.PI * 2);
+  }
+  context.fill();
+}
+
+/** 두 점을 잇는 굵은 선 하나. 팔·다리를 그리는 데 쓴다. */
+function strokeLimb(
+  context: CanvasRenderingContext2D,
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+  color: string,
+  width: number,
+): void {
+  context.strokeStyle = color;
+  context.lineWidth = width;
+  context.beginPath();
+  context.moveTo(fromX, fromY);
+  context.lineTo(toX, toY);
+  context.stroke();
+}
+
+/**
+ * 머리·유니폼·반바지·팔다리를 갖춘 미니 선수 피규어를 절차적으로 그린다.
+ *
+ * `center`는 기존 원형 토큰과 같은 몸통 중심이고 `radius`는 전체 크기 기준이다.
+ * 선택 링·◆ 같은 오버레이가 같은 중심·반지름을 계속 쓸 수 있도록 좌표 계약을 유지한다.
+ * GK는 유니폼과 반바지 배색을 뒤집어 필드 선수와 구분한다.
+ */
+function drawPlayerFigure(
+  context: CanvasRenderingContext2D,
+  center: { x: number; y: number },
+  radius: number,
+  team: "home" | "away",
+  role: string,
+): void {
+  const teamColor = team === "home" ? theme.team.home : theme.team.away;
+  const darkColor = team === "home" ? theme.team.homeDark : theme.team.awayDark;
+  const jersey = role === "GK" ? darkColor : teamColor;
+  const shorts = role === "GK" ? teamColor : darkColor;
+  const { x, y } = center;
+  const baseAlpha = context.globalAlpha;
+
+  // 다리: 허벅지는 살색, 무릎 아래는 팀 색 양말, 발끝은 검은 축구화
+  strokeLimb(context, x - radius * 0.17, y + radius * 0.28, x - radius * 0.21, y + radius * 0.5, theme.board.skin, radius * 0.15);
+  strokeLimb(context, x + radius * 0.17, y + radius * 0.28, x + radius * 0.21, y + radius * 0.5, theme.board.skin, radius * 0.15);
+  strokeLimb(context, x - radius * 0.21, y + radius * 0.48, x - radius * 0.24, y + radius * 0.7, jersey, radius * 0.16);
+  strokeLimb(context, x + radius * 0.21, y + radius * 0.48, x + radius * 0.24, y + radius * 0.7, jersey, radius * 0.16);
+  fillCircle(context, x - radius * 0.26, y + radius * 0.74, radius * 0.11, "#15161a");
+  fillCircle(context, x + radius * 0.26, y + radius * 0.74, radius * 0.11, "#15161a");
+
+  // 반바지: 허리에서 허벅지까지의 사다리꼴과 양옆 흰 줄무늬
+  context.fillStyle = shorts;
+  context.beginPath();
+  context.moveTo(x - radius * 0.34, y + radius * 0.08);
+  context.lineTo(x + radius * 0.34, y + radius * 0.08);
+  context.lineTo(x + radius * 0.3, y + radius * 0.38);
+  context.lineTo(x - radius * 0.3, y + radius * 0.38);
+  context.lineTo(x - radius * 0.34, y + radius * 0.08);
+  context.fill();
+  context.globalAlpha = baseAlpha * 0.7;
+  strokeLimb(context, x - radius * 0.31, y + radius * 0.1, x - radius * 0.28, y + radius * 0.36, theme.board.chalk, 1.6);
+  strokeLimb(context, x + radius * 0.31, y + radius * 0.1, x + radius * 0.28, y + radius * 0.36, theme.board.chalk, 1.6);
+  context.globalAlpha = baseAlpha;
+
+  // 팔: 어두운 윤곽 위에 유니폼 색 소매를 겹쳐 그리고 손은 살색 점으로 마감
+  strokeLimb(context, x - radius * 0.42, y - radius * 0.3, x - radius * 0.58, y + radius * 0.1, "#15161a", radius * 0.2);
+  strokeLimb(context, x + radius * 0.42, y - radius * 0.3, x + radius * 0.58, y + radius * 0.1, "#15161a", radius * 0.2);
+  strokeLimb(context, x - radius * 0.42, y - radius * 0.3, x - radius * 0.58, y + radius * 0.1, jersey, radius * 0.15);
+  strokeLimb(context, x + radius * 0.42, y - radius * 0.3, x + radius * 0.58, y + radius * 0.1, jersey, radius * 0.15);
+  fillCircle(context, x - radius * 0.58, y + radius * 0.14, radius * 0.09, theme.board.skin);
+  fillCircle(context, x + radius * 0.58, y + radius * 0.14, radius * 0.09, theme.board.skin);
+
+  // 몸통(유니폼): 어깨가 넓고 허리가 좁은 사다리꼴 + 만화풍 외곽선
+  context.fillStyle = jersey;
+  context.beginPath();
+  context.moveTo(x - radius * 0.46, y - radius * 0.38);
+  context.lineTo(x + radius * 0.46, y - radius * 0.38);
+  context.lineTo(x + radius * 0.34, y + radius * 0.14);
+  context.lineTo(x - radius * 0.34, y + radius * 0.14);
+  context.lineTo(x - radius * 0.46, y - radius * 0.38);
+  context.fill();
+  context.globalAlpha = baseAlpha * 0.55;
+  context.strokeStyle = "#0d0f0c";
+  context.lineWidth = 2;
+  context.stroke();
+  context.globalAlpha = baseAlpha;
+
+  // 유니폼 음영: 오른쪽 절반을 살짝 어둡게 눌러 입체감을 만든다.
+  context.globalAlpha = baseAlpha * 0.18;
+  context.fillStyle = "#000000";
+  context.beginPath();
+  context.moveTo(x, y - radius * 0.38);
+  context.lineTo(x + radius * 0.46, y - radius * 0.38);
+  context.lineTo(x + radius * 0.34, y + radius * 0.14);
+  context.lineTo(x, y + radius * 0.14);
+  context.lineTo(x, y - radius * 0.38);
+  context.fill();
+  context.globalAlpha = baseAlpha;
+
+  // 카라: 목선의 밝은 브이넥
+  context.globalAlpha = baseAlpha * 0.8;
+  strokeLimb(context, x - radius * 0.12, y - radius * 0.37, x, y - radius * 0.28, theme.board.chalk, 1.6);
+  strokeLimb(context, x + radius * 0.12, y - radius * 0.37, x, y - radius * 0.28, theme.board.chalk, 1.6);
+  context.globalAlpha = baseAlpha;
+
+  // 머리: 살색 얼굴, 머리카락, 왼쪽 위 하이라이트
+  fillCircle(context, x, y - radius * 0.62, radius * 0.28, theme.board.skin);
+  context.globalAlpha = baseAlpha * 0.9;
+  fillCircle(context, x - radius * 0.02, y - radius * 0.75, radius * 0.21, "#2b2119");
+  context.globalAlpha = baseAlpha * 0.35;
+  fillCircle(context, x - radius * 0.1, y - radius * 0.68, radius * 0.07, "#ffffff");
+  context.globalAlpha = baseAlpha;
+
+  // 가슴의 역할 문자
+  context.fillStyle = theme.board.pieceText;
+  context.font = `bold ${Math.floor(radius * 0.42)}px sans-serif`;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(role, x, y - radius * 0.12);
 }
 
 /** 기물, 역할 문자, 공과 현재 선택 테두리를 상태 위에 그린다. */
@@ -568,50 +948,38 @@ function drawPieces(
 ): void {
   const gameState = state.gameState;
   if (!gameState) return;
-  const radius = BOARD_GEOMETRY.cell * 0.35;
   const centerOf = (piece: { id: number; pos: Pos }) =>
-    overrides?.pieceCenters?.get(piece.id) ?? cellCenter(piece.pos);
+    overrides?.pieceCenters?.get(piece.id) ?? pieceTokenCenter(piece.pos);
 
-  for (const piece of gameState.pieces) {
+  // 뒤(위쪽 행)부터 그려 앞의 기물이 자연스럽게 겹치게 한다.
+  const painterOrder = [...gameState.pieces].sort(
+    (left, right) => left.pos.y - right.pos.y || left.pos.x - right.pos.x,
+  );
+
+  for (const piece of painterOrder) {
     const center = centerOf(piece);
+    const radius = tokenRadius(piece.pos);
     // 팀 턴 행동을 다 쓴 현재 팀 선수는 흐리게 그려 "선택해도 소용없음"을 보여준다.
     const usedActions = gameState.actionCountByPiece[piece.id] ?? 0;
     const isActiveTeam = piece.team === gameState.activeTeam;
     const exhausted = isActiveTeam && usedActions >= 2;
     const baseAlpha = exhausted ? 0.4 : 1;
 
-    // 그림자 → 유니폼 → 어두운 테두리 → 상단 하이라이트 순으로 입체감을 만든다.
-    context.globalAlpha = 0.3 * baseAlpha;
-    fillCircle(context, center.x + 3, center.y + 7, radius * 0.95, "#000000");
+    // 바닥 그림자 위에 미니 선수 피규어를 세운다.
+    context.globalAlpha = 0.28 * baseAlpha;
+    fillGroundShadow(context, center.x + 2, center.y + radius * 0.78, radius * 0.6, radius * 0.22);
     context.globalAlpha = baseAlpha;
-    fillCircle(
-      context,
-      center.x,
-      center.y,
-      radius,
-      piece.team === "home" ? theme.team.home : theme.team.away,
-    );
-    context.globalAlpha = 0.35 * baseAlpha;
-    strokeCircle(context, center.x, center.y, radius, "#000000", 3);
-    context.globalAlpha = 0.16 * baseAlpha;
-    fillCircle(context, center.x - radius * 0.25, center.y - radius * 0.3, radius * 0.6, "#ffffff");
-    context.globalAlpha = baseAlpha;
-
-    context.fillStyle = theme.board.pieceText;
-    context.font = `bold ${Math.floor(BOARD_GEOMETRY.cell * 0.28)}px sans-serif`;
-    context.textAlign = "center";
-    context.textBaseline = "middle";
-    context.fillText(piece.role, center.x, center.y);
+    drawPlayerFigure(context, center, radius, piece.team, piece.role);
     context.globalAlpha = 1;
 
-    // 현재 팀 턴에 이미 쓴 행동 수를 토큰 아래 작은 점으로 표시한다.
+    // 현재 팀 턴에 이미 쓴 행동 수를 발밑 아래 작은 점으로 표시한다.
     if (isActiveTeam && usedActions > 0) {
       for (let dot = 0; dot < usedActions; dot += 1) {
         fillCircle(
           context,
-          center.x - 7 + dot * 14,
-          center.y + radius + 9,
-          4,
+          center.x - 6 + dot * 12,
+          center.y + radius * 0.98,
+          3.5,
           theme.board.chalk,
         );
       }
@@ -625,7 +993,7 @@ function drawPieces(
             ? theme.board.pressured
             : null;
       if (stateColor) {
-        strokeCircle(context, center.x, center.y, BOARD_GEOMETRY.cell * 0.39, stateColor, 5);
+        strokeCircle(context, center.x, center.y, radius + 4, stateColor, 5);
       }
     }
   }
@@ -633,18 +1001,15 @@ function drawPieces(
   if (!overrides?.hideBall) {
     if (gameState.ball.kind === "loose") {
       const center = cellCenter(gameState.ball.pos);
-      drawBall(context, center.x, center.y, BOARD_GEOMETRY.cell * 0.14);
+      const scale = boardScaleAt(gameState.ball.pos.y + 0.5);
+      drawBall(context, center.x, center.y - 6 * scale, BOARD_GEOMETRY.cell * 0.14 * scale);
     } else {
       const carrierId = gameState.ball.pieceId;
       const carrier = gameState.pieces.find((piece) => piece.id === carrierId);
       if (carrier) {
         const center = centerOf(carrier);
-        drawBall(
-          context,
-          center.x + BOARD_GEOMETRY.cell * 0.24,
-          center.y - BOARD_GEOMETRY.cell * 0.24,
-          BOARD_GEOMETRY.cell * 0.13,
-        );
+        const radius = tokenRadius(carrier.pos);
+        drawBall(context, center.x + radius * 0.75, center.y + radius * 0.55, radius * 0.38);
       }
     }
   }
@@ -656,21 +1021,20 @@ function drawPieces(
       context,
       center.x,
       center.y,
-      BOARD_GEOMETRY.cell * 0.42,
+      tokenRadius(selected.pos) + 8,
       theme.board.selected,
       6,
     );
   }
 }
 
-/** 현재 팀의 남은 행동 포인트를 그 팀 골대 쪽 여백에 3개의 pip으로 표시한다. */
+/** 현재 팀의 남은 행동 포인트를 그 팀 공격 진영 위쪽 모서리에 3개의 pip으로 표시한다. */
 function drawActionPoints(context: CanvasRenderingContext2D, gameState: GameState): void {
-  const { originX, boardRight } = BOARD_GEOMETRY;
-  const x = gameState.activeTeam === "home" ? originX / 2 : boardRight + originX / 2;
+  const x = gameState.activeTeam === "home" ? 42 : BOARD_GEOMETRY.canvasWidth - 42;
   const teamColor = gameState.activeTeam === "home" ? theme.team.home : theme.team.away;
 
   for (let index = 0; index < 3; index += 1) {
-    const y = 36 + index * 34;
+    const y = 30 + index * 32;
     if (index < gameState.actionsRemaining) {
       fillCircle(context, x, y, 11, teamColor);
       context.globalAlpha = 0.5;
@@ -687,7 +1051,7 @@ function drawActionPoints(context: CanvasRenderingContext2D, gameState: GameStat
 
 function drawCanvas(refs: RenderRefs, state: ClientViewState, overrides?: FrameOverrides): void {
   const context = refs.context;
-  drawPitch(context, refs.canvas);
+  drawBackground(context, refs.canvas);
   if (!state.gameState) return;
   drawActionPoints(context, state.gameState);
   drawThreatLanes(context, state);
@@ -701,10 +1065,7 @@ function drawCanvas(refs: RenderRefs, state: ClientViewState, overrides?: FrameO
     drawBall(context, overrides.flyingBall.x, overrides.flyingBall.y, BOARD_GEOMETRY.cell * 0.15);
   }
   if (overrides?.goalFlash && overrides.goalFlash > 0) {
-    const center = {
-      x: BOARD_GEOMETRY.originX + (BOARD_W * BOARD_GEOMETRY.cell) / 2,
-      y: (BOARD_H * BOARD_GEOMETRY.cell) / 2,
-    };
+    const center = projectPoint(BOARD_W / 2, BOARD_H / 2);
     context.globalAlpha = Math.min(1, overrides.goalFlash);
     context.fillStyle = theme.board.selected;
     context.font = `bold ${Math.floor(BOARD_GEOMETRY.cell * 1.4)}px sans-serif`;
@@ -769,12 +1130,13 @@ function planAnimation(
       : undefined;
 
   if (lastMove.move.kind === "move") {
+    // 이동 애니메이션은 토큰 중심(높이감 포함) 사이를 보간한다.
     return {
       durationMs: 200,
       kind: "pieceMove",
       pieceId: lastMove.move.pieceId,
-      fromPx,
-      toPx: cellCenter(lastMove.move.to),
+      fromPx: pieceTokenCenter(lastMove.from),
+      toPx: pieceTokenCenter(lastMove.move.to),
       goal: false,
       label: null,
     };

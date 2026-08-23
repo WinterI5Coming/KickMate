@@ -1178,3 +1178,40 @@ describe("규칙 안내 메시지와 이벤트 로그", () => {
     expect(controller.getViewState().events).toEqual([]);
   });
 });
+
+describe("원클릭 행동", () => {
+  it("기물을 선택하면 버튼 없이 모든 대상 후보를 보여주고 클릭 한 번으로 실행한다", () => {
+    const controller = createGameController({
+      engineClient: new FakeEngineClient(),
+      onChange: () => undefined,
+    });
+    controller.startGame();
+
+    // 킥오프 소유자(6,4)를 선택하면 패스·슛 후보가 즉시 함께 나타난다.
+    controller.handleTarget({ kind: "cell", pos: { x: 6, y: 4 } });
+    const view = controller.getViewState();
+    expect(view.selectedAction).toBeNull();
+    expect(view.candidateMoves.some((move) => move.kind === "pass")).toBe(true);
+    expect(view.candidateMoves.some((move) => move.kind === "shoot")).toBe(true);
+
+    // 행동 버튼 없이 아군(5,4)을 바로 클릭하면 패스가 실행된다.
+    controller.handleTarget({ kind: "cell", pos: { x: 5, y: 4 } });
+
+    expect(controller.getViewState().gameState!.ball).toEqual({ kind: "held", pieceId: 5 });
+  });
+
+  it("행동 버튼을 누르면 그 종류의 후보만 남기는 필터로 동작한다", () => {
+    const controller = createGameController({
+      engineClient: new FakeEngineClient(),
+      onChange: () => undefined,
+    });
+    controller.startGame();
+    controller.handleTarget({ kind: "cell", pos: { x: 6, y: 4 } });
+
+    controller.selectAction("shoot");
+
+    const view = controller.getViewState();
+    expect(view.candidateMoves.length).toBeGreaterThan(0);
+    expect(view.candidateMoves.every((move) => move.kind === "shoot")).toBe(true);
+  });
+});

@@ -147,7 +147,8 @@ export function createGameController(options: GameControllerOptions): GameContro
     availableActions = (["move", "pass", "shoot"] as const).filter((action) =>
       pieceMoves.some((move) => move.kind === action),
     );
-    setCandidates([]);
+    // 선택 즉시 이 기물의 모든 대상 후보를 보여줘 버튼 없이 한 번의 클릭으로 실행하게 한다.
+    setCandidates(pieceMoves.filter(isTargetedMove));
     // 클릭이 왜 행동으로 이어지지 않는지 이유를 함께 안내한다.
     const usedActions = gameState.actionCountByPiece[pieceId] ?? 0;
     const isCarrier = gameState.ball.kind === "held" && gameState.ball.pieceId === pieceId;
@@ -376,10 +377,12 @@ export function createGameController(options: GameControllerOptions): GameContro
         return;
       }
 
+      // 행동 버튼은 필터일 뿐이다. 선택하지 않았다면 종류가 서로 겹치지 않는 대상
+      // (이동=빈 칸, 패스=아군, 슛=골문, 스틸=상대 소유자)을 바로 실행한다.
       const actionMove = candidateMoves.find(
         (move) =>
           isTargetedMove(move) &&
-          move.kind === selectedAction &&
+          (selectedAction === null || move.kind === selectedAction) &&
           moveMatchesTarget(gameState!, move, target),
       );
       if (actionMove) {

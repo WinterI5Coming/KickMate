@@ -5,6 +5,8 @@ import {
   canvasPointToTarget,
   isTargetedMove,
   moveMatchesTarget,
+  projectCellCenter,
+  projectGoalCenter,
   targetForMove,
   type TargetedMove,
 } from "./input";
@@ -15,30 +17,44 @@ function requireTargeted(move: Move | undefined): TargetedMove {
 }
 
 describe("Canvas 입력 변환", () => {
-  it("경기장 왼쪽 위 내부 픽셀을 첫 번째 보드 칸으로 바꾼다", () => {
-    expect(canvasPointToTarget(81, 1)).toEqual({
+  it("첫 번째 보드 칸의 투영 중심 픽셀을 그 칸으로 되돌린다", () => {
+    const center = projectCellCenter({ x: 0, y: 0 });
+    expect(canvasPointToTarget(center.x, center.y)).toEqual({
       kind: "cell",
       pos: { x: 0, y: 0 },
     });
   });
 
-  it.each([
-    [1, "left"],
-    [1121, "right"],
-  ] as const)("양쪽 골대 여백의 골문 행을 goal 대상으로 바꾼다", (x, side) => {
-    expect(canvasPointToTarget(x, 321)).toEqual({
-      kind: "goal",
-      side,
-      row: 4,
-    });
+  it("모든 보드 칸의 투영 중심이 자기 칸으로 왕복된다", () => {
+    for (let x = 0; x < 13; x += 1) {
+      for (let y = 0; y < 9; y += 1) {
+        const center = projectCellCenter({ x, y });
+        expect(canvasPointToTarget(center.x, center.y)).toEqual({
+          kind: "cell",
+          pos: { x, y },
+        });
+      }
+    }
   });
+
+  it.each(["left", "right"] as const)(
+    "양쪽 골대 여백의 골문 행을 goal 대상으로 바꾼다",
+    (side) => {
+      const center = projectGoalCenter(side, 4);
+      expect(canvasPointToTarget(center.x, center.y)).toEqual({
+        kind: "goal",
+        side,
+        row: 4,
+      });
+    },
+  );
 
   it("골문 행 바깥의 여백은 경기 대상으로 취급하지 않는다", () => {
     expect(canvasPointToTarget(1, 1)).toEqual({ kind: "outside" });
   });
 
   it.each([-1, 1200])("Canvas 가로 경계 바깥은 골대로 취급하지 않는다", (x) => {
-    expect(canvasPointToTarget(x, 321)).toEqual({ kind: "outside" });
+    expect(canvasPointToTarget(x, 349)).toEqual({ kind: "outside" });
   });
 
   it("일반 이동의 목적지 칸을 클릭 목표로 사용한다", () => {

@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { createInitialState, legalMoves, previewMove } from "../engine/rules";
-import { buildPresentation, createRenderer, type RenderRefs } from "./render";
-import { targetForMove } from "./input";
+import {
+  buildPresentation,
+  createRenderer,
+  pieceTokenCenter,
+  tokenRadius,
+  type RenderRefs,
+} from "./render";
+import { boardScaleAt, projectCellCenter, targetForMove } from "./input";
 import type { ClientViewState } from "./types";
 
 const readyState: ClientViewState = {
@@ -363,10 +369,11 @@ describe("createRenderer", () => {
     render(humanState);
 
     expect(context.fillRects).toContainEqual([0, 0, 1200, 720]);
-    expect(context.texts).toEqual([
-      "GK", "DF", "DF", "MF", "MF", "FW",
-      "GK", "DF", "DF", "MF", "MF", "FW",
-    ]);
+    // 원근 렌더링은 뒤(위쪽 행)부터 그리므로 역할 문자도 화면 깊이 순서로 나타난다.
+    const painterOrder = [...humanState.gameState!.pieces]
+      .sort((left, right) => left.pos.y - right.pos.y || left.pos.x - right.pos.x)
+      .map((piece) => piece.role);
+    expect(context.texts).toEqual(painterOrder);
     expect(context.arcs.length).toBeGreaterThanOrEqual(13);
   });
 
@@ -394,20 +401,25 @@ describe("createRenderer", () => {
     // 직전 수 선(라스트무브 색), 선택 테두리, 압박 테두리, 이동 후보 점이 한 프레임에 함께 나타난다.
     const target = targetForMove(gameState, move);
     if (target.kind !== "cell") throw new Error("이동 후보는 칸 대상이어야 합니다.");
-    const from = { x: 80 + actor.pos.x * 80 + 40, y: actor.pos.y * 80 + 40 };
-    const to = { x: 80 + target.pos.x * 80 + 40, y: target.pos.y * 80 + 40 };
+    const fromGround = projectCellCenter(actor.pos);
+    const toGround = projectCellCenter(target.pos);
     expect(context.lines).toContainEqual({
-      from: [from.x, from.y],
-      to: [to.x, to.y],
+      from: [fromGround.x, fromGround.y],
+      to: [toGround.x, toGround.y],
       color: "#bdb2ff",
       width: 7,
     });
+    const token = pieceTokenCenter(actor.pos);
     expect(
       context.circleStrokes.filter(
-        (stroke) => stroke.x === from.x && stroke.y === from.y && stroke.color === "#ffd166",
+        (stroke) => stroke.x === token.x && stroke.y === token.y && stroke.color === "#ffd166",
       ),
     ).toHaveLength(1);
-    expect(context.arcs).toContainEqual([to.x, to.y, 80 * 0.13]);
+    expect(context.arcs).toContainEqual([
+      toGround.x,
+      toGround.y,
+      80 * 0.13 * boardScaleAt(target.pos.y + 0.5),
+    ]);
   });
 
   it("아군 기물에 연결되는 패스 후보는 기물 밖에서도 보이는 테두리로 표시한다", () => {
@@ -431,7 +443,12 @@ describe("createRenderer", () => {
       candidateMoves: [pass],
     });
 
-    expect(context.strokes).toContainEqual([520, 360, 32]);
+    const receiverToken = pieceTokenCenter({ x: 5, y: 4 });
+    expect(context.strokes).toContainEqual([
+      receiverToken.x,
+      receiverToken.y,
+      tokenRadius({ x: 5, y: 4 }) + 6,
+    ]);
   });
 
   it("성공 패스 경로는 초록 선과 도착 확률을 그리고 실제 수신자를 이중 강조한다", () => {
@@ -455,15 +472,20 @@ describe("createRenderer", () => {
 
     expect(context.texts).toContain("100%");
     expect(context.texts.indexOf("100%")).toBeGreaterThan(context.texts.lastIndexOf("FW"));
+    const passerToken = pieceTokenCenter({ x: 6, y: 4 });
+    const receiverToken = pieceTokenCenter({ x: 5, y: 4 });
     expect(context.lines).toContainEqual({
-      from: [600, 360],
-      to: [520, 360],
+      from: [passerToken.x, passerToken.y],
+      to: [receiverToken.x, receiverToken.y],
       color: "#39d98a",
       width: 5,
     });
     expect(
       context.circleStrokes.filter(
-        (stroke) => stroke.x === 520 && stroke.y === 360 && stroke.color === "#f6c453",
+        (stroke) =>
+          stroke.x === receiverToken.x &&
+          stroke.y === receiverToken.y &&
+          stroke.color === "#f6c453",
       ),
     ).toHaveLength(2);
     expect(context.globalAlpha).toBe(1);
@@ -494,15 +516,20 @@ describe("createRenderer", () => {
 
     // 관문 확률(필드 0.65 차단, GK 0.75 선방)을 모두 뚫을 확률 0.35×0.25는 9%로 표시된다.
     expect(context.texts).toContain("9%");
+    const shooterToken = pieceTokenCenter({ x: 9, y: 2 });
+    const blockerToken = pieceTokenCenter({ x: 11, y: 3 });
     expect(context.lines).toContainEqual({
-      from: [840, 200],
-      to: [1000, 280],
+      from: [shooterToken.x, shooterToken.y],
+      to: [blockerToken.x, blockerToken.y],
       color: "#ff5c5c",
       width: 5,
     });
     expect(
       context.circleStrokes.filter(
-        (stroke) => stroke.x === 1000 && stroke.y === 280 && stroke.color === "#f6c453",
+        (stroke) =>
+          stroke.x === blockerToken.x &&
+          stroke.y === blockerToken.y &&
+          stroke.color === "#f6c453",
       ),
     ).toHaveLength(2);
     expect(context.globalAlpha).toBe(1);
@@ -563,10 +590,11 @@ describe("createRenderer", () => {
 
     render({ ...humanState, gameState });
 
+    const carrierToken = pieceTokenCenter({ x: 6, y: 4 });
     expect(context.fillTextRecords).toContainEqual({
       text: "◆",
-      x: 600,
-      y: 336,
+      x: carrierToken.x,
+      y: carrierToken.y - tokenRadius({ x: 6, y: 4 }) - 10,
       color: "#d8b4fe",
     });
   });
@@ -607,15 +635,21 @@ describe("createRenderer", () => {
       selectedStealTargetId: 9,
     });
 
+    const stealerOne = pieceTokenCenter({ x: 7, y: 4 });
+    const stealerTwo = pieceTokenCenter({ x: 7, y: 6 });
+    const carrierToken = pieceTokenCenter({ x: 8, y: 5 });
     expect(context.circleStrokes).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ x: 680, y: 360, color: "#ff4d6d" }),
-        expect.objectContaining({ x: 680, y: 520, color: "#ff4d6d" }),
+        expect.objectContaining({ x: stealerOne.x, y: stealerOne.y, color: "#ff4d6d" }),
+        expect.objectContaining({ x: stealerTwo.x, y: stealerTwo.y, color: "#ff4d6d" }),
       ]),
     );
     expect(
       context.circleStrokes.some(
-        (stroke) => stroke.x === 760 && stroke.y === 440 && stroke.color === "#ff4d6d",
+        (stroke) =>
+          stroke.x === carrierToken.x &&
+          stroke.y === carrierToken.y &&
+          stroke.color === "#ff4d6d",
       ),
     ).toBe(false);
   });

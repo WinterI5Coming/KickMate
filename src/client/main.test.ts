@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createInitialState, legalMoves, previewMove } from "../engine/rules";
+import { projectCellCenter } from "./input";
 import type { WorkerRequest, WorkerResponse } from "../worker/protocol";
 
 class FakeElement {
@@ -157,14 +158,16 @@ describe("브라우저 진입점", () => {
     expect(elements["status-message"].textContent).toBe("내 차례입니다.");
     expect(elements["start-game"].hidden).toBe(true);
 
-    // 킥오프 공 소유자(MF, 6·4)를 고르고 패스 모드에 들어간다.
-    elements.board.dispatch("click", { clientX: 600, clientY: 360 });
+    // 킥오프 공 소유자(MF, 6·4)를 원근 투영된 중심 픽셀로 고르고 패스 모드에 들어간다.
+    const carrierCenter = projectCellCenter({ x: 6, y: 4 });
+    elements.board.dispatch("click", { clientX: carrierCenter.x, clientY: carrierCenter.y });
     expect(elements["action-pass"].hidden).toBe(false);
     elements["action-pass"].dispatch("click");
     expect(elements["status-message"].textContent).toContain("패스할 아군");
 
     // 목표 아군(FW, 5·4)을 직접 클릭한다.
-    elements.board.dispatch("click", { clientX: 520, clientY: 360 });
+    const receiverCenter = projectCellCenter({ x: 5, y: 4 });
+    elements.board.dispatch("click", { clientX: receiverCenter.x, clientY: receiverCenter.y });
 
     const worker = FakeWorker.instances[0]!;
     expect(elements["status-message"].textContent).toBe("내 차례입니다.");

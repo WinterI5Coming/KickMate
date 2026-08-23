@@ -175,6 +175,7 @@ function createRenderRefs(): {
         shoot: buttons.shoot as unknown as HTMLButtonElement,
       },
       eventLog: new FakeElement() as HTMLElement,
+      tacticPanel: new FakeElement() as HTMLElement,
     },
   };
 }
@@ -514,8 +515,8 @@ describe("createRenderer", () => {
       candidatePreviews: [{ move: shoot, preview }],
     });
 
-    // 관문 확률(필드 0.65 차단, GK 0.75 선방)을 모두 뚫을 확률 0.35×0.25는 9%로 표시된다.
-    expect(context.texts).toContain("9%");
+    // 거리 정확도 0.85 × 관문 통과 확률(0.35×0.25)은 약 7%로 표시된다.
+    expect(context.texts).toContain("7%");
     const shooterToken = pieceTokenCenter({ x: 9, y: 2 });
     const blockerToken = pieceTokenCenter({ x: 11, y: 3 });
     expect(context.lines).toContainEqual({
@@ -538,6 +539,8 @@ describe("createRenderer", () => {
   it("압박받는 공 소유자와 버틴 상태를 서로 다른 테두리로 그린다", () => {
     const pressuredRefs = createRenderRefs();
     const gameState = createInitialState();
+    // 킥오프 센터서클 규칙으로 물러난 away FW를 다시 인접시켜 압박 상태를 만든다.
+    gameState.pieces.find((piece) => piece.id === 11)!.pos = { x: 7, y: 4 };
 
     createRenderer(pressuredRefs.refs)({ ...humanState, gameState });
     expect(
@@ -602,6 +605,7 @@ describe("createRenderer", () => {
   it("보호 소유자를 상대 두 명이 포위하면 보라색 ◆를 표시하지 않는다", () => {
     const { refs, context } = createRenderRefs();
     const gameState = createInitialState();
+    gameState.pieces.find((piece) => piece.id === 11)!.pos = { x: 7, y: 4 };
     gameState.pieces.find((piece) => piece.id === 10)!.pos = { x: 7, y: 5 };
     gameState.stealProtection = {
       pieceId: 3,

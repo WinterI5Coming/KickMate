@@ -190,6 +190,35 @@
         opacity: 0.88;
       }
       #end-turn { border-color: #ff5c5c55; }
+      #tactic-panel {
+        display: grid;
+        gap: 8px;
+        justify-items: center;
+      }
+      .tactic-group {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+      }
+      .tactic-label {
+        min-width: 64px;
+        font-size: 0.85rem;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        opacity: 0.7;
+      }
+      button.tactic {
+        min-width: 92px;
+        padding: 8px 14px;
+        font-size: 0.9rem;
+      }
+      button.tactic[aria-pressed="true"] {
+        border-color: var(--gold);
+        color: var(--gold);
+        box-shadow: 0 0 0 2px #ffd16644, 0 4px 14px #00000066;
+      }
       #start-game,
       #new-game {
         justify-self: center;
@@ -230,6 +259,22 @@
         <button id="action-shoot" type="button" hidden>슛</button>
         <button id="action-hold" type="button" hidden>버티기</button>
         <button id="end-turn" type="button" hidden>턴 종료</button>
+      </section>
+      <section id="tactic-panel" aria-label="전술 선택">
+        <div class="tactic-group">
+          <span class="tactic-label">내 전술</span>
+          <button id="tactic-home-balanced" type="button" class="tactic" aria-pressed="true">밸런스</button>
+          <button id="tactic-home-tikitaka" type="button" class="tactic" aria-pressed="false">티키타카</button>
+          <button id="tactic-home-counter" type="button" class="tactic" aria-pressed="false">역습축구</button>
+          <button id="tactic-home-gegenpress" type="button" class="tactic" aria-pressed="false">게겐프레싱</button>
+        </div>
+        <div class="tactic-group">
+          <span class="tactic-label">봇 전술</span>
+          <button id="tactic-away-balanced" type="button" class="tactic" aria-pressed="true">밸런스</button>
+          <button id="tactic-away-tikitaka" type="button" class="tactic" aria-pressed="false">티키타카</button>
+          <button id="tactic-away-counter" type="button" class="tactic" aria-pressed="false">역습축구</button>
+          <button id="tactic-away-gegenpress" type="button" class="tactic" aria-pressed="false">게겐프레싱</button>
+        </div>
       </section>
       <button id="start-game" type="button">게임 시작</button>
       <button id="new-game" type="button" hidden>새 게임</button>

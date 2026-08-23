@@ -167,6 +167,12 @@ describe("GameController", () => {
     const controller = createGameController({
       engineClient: new FakeEngineClient(),
       onChange: () => undefined,
+      // 킥오프 센터서클 규칙으로 물러난 away FW를 다시 인접시켜 압박 국면을 만든다.
+      createState: () => {
+        const state = createInitialState();
+        state.pieces.find((piece) => piece.id === 11)!.pos = { x: 7, y: 4 };
+        return state;
+      },
     });
     controller.startGame();
     const state = controller.getViewState().gameState!;
@@ -1119,9 +1125,14 @@ describe("규칙 안내 메시지와 이벤트 로그", () => {
     const controller = createGameController({
       engineClient: new FakeEngineClient(),
       onChange: () => undefined,
+      // 킥오프 센터서클 규칙으로 물러난 away FW를 다시 인접시켜 압박 국면을 만든다.
+      createState: () => {
+        const state = createInitialState();
+        state.pieces.find((piece) => piece.id === 11)!.pos = { x: 7, y: 4 };
+        return state;
+      },
     });
     controller.startGame();
-    // 초기 킥오프 소유자(6,4)는 상대 FW(7,4)와 인접해 압박 상태다.
     controller.handleTarget({ kind: "cell", pos: { x: 6, y: 4 } });
 
     expect(controller.getViewState().message).toEqual({ kind: "pressuredCarrier" });
@@ -1213,5 +1224,35 @@ describe("원클릭 행동", () => {
     const view = controller.getViewState();
     expect(view.candidateMoves.length).toBeGreaterThan(0);
     expect(view.candidateMoves.every((move) => move.kind === "shoot")).toBe(true);
+  });
+});
+
+describe("전술 선택", () => {
+  it("startGame에 전달한 전술이 경기 상태에 반영된다", () => {
+    const controller = createGameController({
+      engineClient: new FakeEngineClient(),
+      onChange: () => undefined,
+    });
+
+    controller.startGame({ home: "tikitaka", away: "gegenpress" });
+
+    expect(controller.getViewState().gameState!.teamStyles).toEqual({
+      home: "tikitaka",
+      away: "gegenpress",
+    });
+  });
+
+  it("전술 없이 시작하면 양 팀 모두 balanced다", () => {
+    const controller = createGameController({
+      engineClient: new FakeEngineClient(),
+      onChange: () => undefined,
+    });
+
+    controller.startGame();
+
+    expect(controller.getViewState().gameState!.teamStyles).toEqual({
+      home: "balanced",
+      away: "balanced",
+    });
   });
 });

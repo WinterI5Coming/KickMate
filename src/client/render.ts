@@ -36,6 +36,8 @@ export interface Presentation {
   status: string;
   showStart: boolean;
   showNewGame: boolean;
+  /** 전술 선택 패널을 보여줄지 여부. 경기 시작 전과 종료 후에만 연다. */
+  showTactics: boolean;
   showHold: boolean;
   showEndTurn: boolean;
   visibleActions: ClientAction[];
@@ -85,6 +87,8 @@ export interface RenderRefs {
   actionButtons: Record<ClientAction, HTMLButtonElement>;
   /** 최근 사건 문구를 줄바꿈으로 나열하는 이벤트 로그 요소. */
   eventLog: HTMLElement;
+  /** 경기 시작 전 전술을 고르는 패널 요소. */
+  tacticPanel: HTMLElement;
 }
 
 /** 구조화된 Controller 메시지를 실제 한국어 UI 문구로 변환한다. */
@@ -161,6 +165,10 @@ export function buildPresentation(state: ClientViewState): Presentation {
     status: state.message ? messageText(state.message) : phaseStatus(state),
     showStart: state.phase === "ready",
     showNewGame: state.phase === "finished" || state.phase === "fatalError",
+    showTactics:
+      state.phase === "ready" ||
+      state.phase === "finished" ||
+      state.phase === "fatalError",
     showHold: isHumanTurn && state.canHold,
     showEndTurn: isHumanTurn && state.canEndTurn,
     visibleActions: isHumanTurn ? [...state.availableActions] : [],
@@ -1246,6 +1254,7 @@ export function createRenderer(
     refs.statusMessage.textContent = presentation.status;
     refs.eventLog.textContent = presentation.eventLines.join("\n");
     refs.eventLog.hidden = presentation.eventLines.length === 0;
+    refs.tacticPanel.hidden = !presentation.showTactics;
     refs.startButton.hidden = !presentation.showStart;
     refs.startButton.disabled = !presentation.showStart;
     refs.newGameButton.hidden = !presentation.showNewGame;

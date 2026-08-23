@@ -110,6 +110,15 @@ function installBrowserFakes() {
     "action-hold": new FakeElement(),
     "end-turn": new FakeElement(),
     "event-log": new FakeElement(),
+    "tactic-panel": new FakeElement(),
+    "tactic-home-balanced": new FakeElement(),
+    "tactic-home-tikitaka": new FakeElement(),
+    "tactic-home-counter": new FakeElement(),
+    "tactic-home-gegenpress": new FakeElement(),
+    "tactic-away-balanced": new FakeElement(),
+    "tactic-away-tikitaka": new FakeElement(),
+    "tactic-away-counter": new FakeElement(),
+    "tactic-away-gegenpress": new FakeElement(),
   };
   const bySelector = new Map(
     Object.entries(elements).map(([id, element]) => [`#${id}`, element]),

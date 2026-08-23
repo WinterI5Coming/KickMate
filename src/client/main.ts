@@ -49,7 +49,40 @@ const refs: RenderRefs = {
   endTurnButton: requireElement<HTMLButtonElement>("#end-turn"),
   actionButtons,
   eventLog: requireElement<HTMLElement>("#event-log"),
+  tacticPanel: requireElement<HTMLElement>("#tactic-panel"),
 };
+
+// 전술 선택: 팀별 4버튼 중 하나를 토글하고 게임 시작 시 엔진에 전달한다.
+const TEAM_STYLES = ["balanced", "tikitaka", "counter", "gegenpress"] as const;
+type TeamStyleChoice = (typeof TEAM_STYLES)[number];
+const selectedStyles: Record<"home" | "away", TeamStyleChoice> = {
+  home: "balanced",
+  away: "balanced",
+};
+const tacticButtons: Record<"home" | "away", Record<TeamStyleChoice, HTMLButtonElement>> = {
+  home: Object.fromEntries(
+    TEAM_STYLES.map((style) => [style, requireElement<HTMLButtonElement>(`#tactic-home-${style}`)]),
+  ) as Record<TeamStyleChoice, HTMLButtonElement>,
+  away: Object.fromEntries(
+    TEAM_STYLES.map((style) => [style, requireElement<HTMLButtonElement>(`#tactic-away-${style}`)]),
+  ) as Record<TeamStyleChoice, HTMLButtonElement>,
+};
+
+function selectTactic(team: "home" | "away", style: TeamStyleChoice): void {
+  selectedStyles[team] = style;
+  for (const candidate of TEAM_STYLES) {
+    tacticButtons[team][candidate].setAttribute(
+      "aria-pressed",
+      String(candidate === style),
+    );
+  }
+}
+
+for (const team of ["home", "away"] as const) {
+  for (const style of TEAM_STYLES) {
+    tacticButtons[team][style].addEventListener("click", () => selectTactic(team, style));
+  }
+}
 
 document.title = strings.app.title;
 
@@ -62,8 +95,8 @@ const controller = createGameController({ engineClient, onChange: render });
 // Controller 생성 직후에는 상태 변경이 없으므로 ready 화면을 한 번 직접 그린다.
 render(controller.getViewState());
 
-refs.startButton.addEventListener("click", () => controller.startGame());
-refs.newGameButton.addEventListener("click", () => controller.restartGame());
+refs.startButton.addEventListener("click", () => controller.startGame({ ...selectedStyles }));
+refs.newGameButton.addEventListener("click", () => controller.restartGame({ ...selectedStyles }));
 refs.holdButton.addEventListener("click", () => controller.holdBall());
 refs.endTurnButton.addEventListener("click", () => controller.endTurn());
 

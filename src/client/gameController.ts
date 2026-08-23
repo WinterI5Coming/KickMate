@@ -17,7 +17,7 @@ import {
   SHOT_MAX,
   sideToMove,
 } from "../engine/rules";
-import type { GameState, Move } from "../engine/types";
+import type { GameState, Move, Team, TeamStyle } from "../engine/types";
 import type { EngineClient } from "./engineClient";
 import { isTargetedMove, moveMatchesTarget, targetForMove } from "./input";
 import type { CanvasTarget, ClientAction, ClientViewState, MatchEvent } from "./types";
@@ -31,10 +31,10 @@ const EVENT_LIMIT = 30;
 export interface GameController {
   /** 현재 Renderer 입력 상태의 스냅샷을 반환한다. */
   getViewState(): ClientViewState;
-  /** ready 상태에서 새 경기를 시작한다. */
-  startGame(): void;
+  /** ready 상태에서 선택한 팀 전술로 새 경기를 시작한다. 생략하면 balanced다. */
+  startGame(styles?: Partial<Record<Team, TeamStyle>>): void;
   /** 현재 단계와 관계없이 새로운 경기를 즉시 시작한다. */
-  restartGame(): void;
+  restartGame(styles?: Partial<Record<Team, TeamStyle>>): void;
   /** 선택된 home 기물이 수행할 행동을 고른다. */
   selectAction(action: ClientAction): void;
   /** Canvas 클릭을 게임 공간의 대상으로 전달한다. */
@@ -119,10 +119,11 @@ export function createGameController(options: GameControllerOptions): GameContro
       : [];
   }
 
-  function beginNewGame(): void {
+  function beginNewGame(styles?: Partial<Record<Team, TeamStyle>>): void {
     gameEpoch += 1;
     phase = "humanTurn";
-    gameState = createState();
+    // 테스트용 상태 factory가 주어지면 그것이 우선이고, 아니면 선택한 전술로 시작한다.
+    gameState = options.createState ? createState() : createInitialState(styles);
     selectedPieceId = null;
     selectedAction = null;
     availableActions = [];
@@ -321,12 +322,12 @@ export function createGameController(options: GameControllerOptions): GameContro
   return {
     getViewState: snapshot,
     startGame: beginNewGame,
-    restartGame() {
+    restartGame(styles) {
       // 실패한 분석 Worker나 진행 중인 요청을 새 경기에 넘기지 않는다.
       if (phase === "fatalError" || phase === "botThinking") {
         options.engineClient.restart();
       }
-      beginNewGame();
+      beginNewGame(styles);
     },
     selectAction(action) {
       if (

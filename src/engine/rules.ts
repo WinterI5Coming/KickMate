@@ -77,6 +77,19 @@ const SHOT_ACCURACY_FALLOFF = 0.15;
 const SHOT_ACCURACY_FLOOR = 0.4;
 
 /**
+ * 스틸을 시도하는 선수의 역할별 성공 확률. [실험 중]
+ *
+ * 100% 스틸은 서로 무한히 뺏고 뺏기는 소유권 핑퐁을 만들었다. 수비 역할일수록 태클이
+ * 강하고, 실패하면 행동만 소모하며 소유권은 그대로다.
+ */
+const STEAL_CHANCE_BY_ROLE: Record<Piece["role"], number> = {
+  GK: 0.9,
+  DF: 0.85,
+  MF: 0.65,
+  FW: 0.45,
+};
+
+/**
  * 슈터와 골라인 x거리에 따른 슛 정확도(과녁 안에 들어갈 확률).
  *
  * 3칸 이내는 1이고 이후 칸마다 0.15씩 감소해 7칸에서 0.4가 된다. 하프라인 저격 대신
@@ -501,7 +514,12 @@ export function previewMove(state: GameState, move: Move): MovePreview {
     };
   }
   if (move.kind === "steal") {
-    return { kind: "steal", targetPieceId: move.targetPieceId, protectedAfter: true };
+    return {
+      kind: "steal",
+      targetPieceId: move.targetPieceId,
+      protectedAfter: true,
+      successChance: STEAL_CHANCE_BY_ROLE[requirePiece(state, move.pieceId).role],
+    };
   }
 
   const actor = requirePiece(state, move.pieceId);
@@ -639,7 +657,8 @@ export function createInitialState(
 
   const state: GameState = {
     turn: 0,
-    maxTurns: 60,
+    // 수 한도: 한 수는 팀 턴(최대 3행동) 하나다. 40수 = 팀당 20턴.
+    maxTurns: 40,
     activeTeam: "home",
     actionsRemaining: ACTIONS_PER_TEAM_TURN,
     actionCountByPiece: {},
@@ -814,12 +833,14 @@ export function legalMoves(state: GameState): Move[] {
   return moves;
 }
 
-/** 현재 팀 턴을 종료하고 상대 팀의 새 3행동 상태를 구성한다. */
+/** 현재 팀 턴을 종료하고 상대 팀의 새 3행동 상태를 구성한다. 팀 턴 하나가 1수다. */
 function switchTeamTurn(state: GameState): void {
   const outgoing = state.activeTeam;
   if (state.stealProtection?.blockedTeam === outgoing) {
     state.stealProtection = null;
   }
+  // 수(turn)는 원자 행동이 아니라 완료된 팀 턴을 센다.
+  state.turn += 1;
   state.activeTeam = otherTeam(outgoing);
   state.actionsRemaining = ACTIONS_PER_TEAM_TURN;
   state.actionCountByPiece = {};
@@ -832,7 +853,6 @@ function completeAtomicAction(
   pieceId: number,
   countsForPiece = true,
 ): void {
-  state.turn += 1;
   state.actionsRemaining -= 1;
   if (countsForPiece) {
     state.actionCountByPiece[pieceId] = (state.actionCountByPiece[pieceId] ?? 0) + 1;
@@ -924,6 +944,14 @@ function chanceRoll(state: GameState, move: Move): number {
  * 확률 1의 결정론적 결과 하나만 갖는다.
  */
 function enumerateResolutions(state: GameState, move: Move): ChanceResolution[] {
+  if (move.kind === "steal") {
+    // 스틸은 시도 선수의 역할 확률로 성공·실패가 갈린다.
+    const chance = STEAL_CHANCE_BY_ROLE[requirePiece(state, move.pieceId).role];
+    return [
+      { probability: chance, tag: "stealSuccess", stopGate: null },
+      { probability: 1 - chance, tag: "stealFailed", stopGate: null },
+    ];
+  }
   if (move.kind !== "pass" && move.kind !== "shoot") {
     return [{ probability: 1, tag: "deterministic", stopGate: null }];
   }
@@ -1026,8 +1054,9 @@ function applyResolvedMove(
       protectNewCarrier(next, keeper.id, team);
     } else if (resolution.stopGate === null) {
       // 정확도와 모든 개입을 뚫으면 득점하고 상대 팀이 센터에서 공을 갖도록 재배치한다.
+      // 득점은 득점 팀의 팀 턴을 끝내므로 1수로 센다.
       next.score[team] += 1;
-      completeAtomicAction(next, move.pieceId);
+      next.turn += 1;
       resetForKickoff(next, otherTeam(team));
       return next;
     } else {
@@ -1050,10 +1079,12 @@ function applyResolvedMove(
       }
     }
   } else if (move.kind === "steal") {
-    // 앞의 kind들을 제외하면 타입상 steal이며, 성공 확률 판정 없이 소유권이 이동한다.
-    next.ball = { kind: "held", pieceId: move.pieceId };
-    protectNewCarrier(next, move.pieceId, otherTeam(team));
-    applyMomentumEscape(next, move.pieceId);
+    if (resolution.tag !== "stealFailed") {
+      next.ball = { kind: "held", pieceId: move.pieceId };
+      protectNewCarrier(next, move.pieceId, otherTeam(team));
+      applyMomentumEscape(next, move.pieceId);
+    }
+    // 실패한 스틸은 행동만 소모하고 소유권을 바꾸지 않는다.
   } else {
     next.heldFirmPieceId = move.pieceId;
   }

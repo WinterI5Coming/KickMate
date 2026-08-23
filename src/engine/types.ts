@@ -105,11 +105,11 @@ export interface StealProtection {
  */
 export interface GameState {
   /**
-   * 지금까지 적용된 행동 수(ply).
-   * 0부터 시작하며 원자 행동을 적용할 때마다 하나씩 증가한다.
+   * 지금까지 완료된 팀 턴 수(수).
+   * 0부터 시작하며 팀 턴이 끝날 때(팀 교대·조기 종료·득점)마다 하나씩 증가한다.
    */
   turn: number;
-  /** 이 값에 도달하면 더 이상 합법 수를 만들지 않는다. 현재 기본값은 60 ply다. */
+  /** 이 값에 도달하면 더 이상 합법 수를 만들지 않는다. 한 수는 팀 턴 하나이며 기본값은 40수다. */
   maxTurns: number;
   /** 현재 3행동 팀 턴을 수행하는 팀. */
   activeTeam: Team;
@@ -195,7 +195,13 @@ export type MovePreview =
       arrivalChance: number;
     }
   | ShootPreview
-  | { kind: "steal"; targetPieceId: number; protectedAfter: true }
+  | {
+      kind: "steal";
+      targetPieceId: number;
+      protectedAfter: true;
+      /** 시도 선수의 역할에 따른 스틸 성공 확률. 0..1이다. */
+      successChance: number;
+    }
   | { kind: "hold" }
   | { kind: "endTurn" };
 
@@ -218,7 +224,9 @@ export interface MoveOutcome {
     | "fieldPossession"
     | "zoneIntercept"
     | "received"
-    | "offTarget";
+    | "offTarget"
+    | "stealSuccess"
+    | "stealFailed";
 }
 
 /**

@@ -57,7 +57,8 @@ describe("초기 국면", () => {
       state = applyMove(state, move);
     }
 
-    expect(state.turn).toBe(3);
+    // 팀 턴 하나가 1수이므로 세 원자 행동 뒤 turn은 1이다.
+    expect(state.turn).toBe(1);
     expect(sideToMove(state)).toBe("away");
     expect(state.actionsRemaining).toBe(3);
     expect(state.actionCountByPiece).toEqual({});
@@ -356,7 +357,8 @@ describe("수 적용", () => {
     expect(rebound.state.score).toEqual({ home: 0, away: 0 });
     expect(rebound.state.ball).toEqual({ kind: "loose", pos: { x: 10, y: 3 } });
     expect(rebound.state.stealProtection).toBeNull();
-    expect(rebound.state.turn).toBe(1);
+    // 팀 턴이 아직 안 끝났으므로 수는 그대로 0이다.
+    expect(rebound.state.turn).toBe(0);
     expect(outcomes.map((outcome) => outcome.state.ball)).toContainEqual(
       applyMove(state, shoot!).ball,
     );
@@ -410,9 +412,16 @@ describe("수 적용", () => {
     );
     expect(steal).toBeDefined();
 
-    const next = applyMove(state, steal!);
+    // FW의 스틸은 45% 확률이므로 성공·실패 두 결과로 나뉜다.
+    const outcomes = applyMoveOutcomes(state, steal!);
+    expect(outcomes.map((outcome) => outcome.tag)).toEqual(["stealSuccess", "stealFailed"]);
+    expect(outcomes[0]!.probability).toBeCloseTo(0.45, 9);
+    const next = outcomes[0]!.state;
 
     expect(next.ball).toEqual({ kind: "held", pieceId: 11 });
+    // 실패 분기는 소유권을 바꾸지 않고 행동만 소모한다.
+    expect(outcomes[1]!.state.ball).toEqual({ kind: "held", pieceId: 3 });
+    expect(outcomes[1]!.state.actionsRemaining).toBe(2);
     expect(next.activeTeam).toBe("away");
     expect(next.actionsRemaining).toBe(2);
     expect(next.actionCountByPiece).toEqual({ 11: 1 });
@@ -664,7 +673,9 @@ describe("압박, 버티기, 스틸 보호", () => {
     const steal = legalMoves(adjacent).find(
       (move) => move.kind === "steal" && move.pieceId === defenderId,
     )!;
-    const stolen = applyMove(adjacent, steal);
+    const stolen = applyMoveOutcomes(adjacent, steal).find(
+      (outcome) => outcome.tag === "stealSuccess",
+    )!.state;
 
     expect(stolen.ball).toEqual({ kind: "held", pieceId: defenderId });
     expect(stolen.stealProtection).toEqual({
@@ -678,10 +689,10 @@ describe("압박, 버티기, 스틸 보호", () => {
     const state = createInitialState();
     state.activeTeam = "away";
     setPos(state, 11, { x: 7, y: 4 });
-    const stolen = applyMove(
+    const stolen = applyMoveOutcomes(
       state,
       legalMoves(state).find((move) => move.kind === "steal" && move.pieceId === 11)!,
-    );
+    ).find((outcome) => outcome.tag === "stealSuccess")!.state;
     // 탈취 관성으로 새 소유자 11은 home 기물에서 가장 멀어지는 (8,3)으로 밀려난다.
     expect(stolen.pieces.find((piece) => piece.id === 11)!.pos).toEqual({ x: 8, y: 3 });
     const homeTurn = applyMove(stolen, { kind: "endTurn" });
@@ -842,16 +853,22 @@ describe("평가와 탐색", () => {
     expect(afterRoot.activeTeam).toBe("away");
     const evalFn = (position: GameState) =>
       position.ball.kind === "held" && position.ball.pieceId < 6 ? 10 : -10;
-    const opponentScores = legalMoves(afterRoot).map((move) => evalFn(applyMove(afterRoot, move)));
+    // 확률 수(스틸 등)는 결과 분포의 기대값으로 평가된다.
+    const opponentScores = legalMoves(afterRoot).map((move) =>
+      applyMoveOutcomes(afterRoot, move).reduce(
+        (sum, outcome) => sum + outcome.probability * evalFn(outcome.state),
+        0,
+      ),
+    );
     const result = search(state, { depth: 2, evalFn });
     const rootValue = result.values.find(
       (value) => value.move.kind === "move" && value.move.pieceId === rootMove.pieceId &&
         value.move.to.x === rootMove.to.x && value.move.to.y === rootMove.to.y,
     );
 
-    expect(opponentScores).toContain(-10);
     expect(opponentScores).toContain(10);
-    expect(rootValue?.score).toBe(Math.min(...opponentScores));
+    expect(Math.min(...opponentScores)).toBeLessThan(10);
+    expect(rootValue?.score).toBeCloseTo(Math.min(...opponentScores), 9);
   });
 
   it("슛 네 결과와 hold/endTurn을 결정적인 우선순위로 정렬한다", () => {
@@ -1008,7 +1025,7 @@ describe("평가와 탐색", () => {
       expect(result.depth).toBe(3);
       expect(result.ms).toBeLessThan(5_000);
     },
-    10_000,
+    40_000,
   );
 
   it(
@@ -1025,16 +1042,17 @@ describe("평가와 탐색", () => {
       expect(result.depth).toBe(3);
       expect(result.ms).toBeLessThan(5_000);
     },
-    10_000,
+    40_000,
   );
 
-  it("60수에 도달하면 합법 수와 최선 수가 없다", () => {
+  it("수 한도에 도달하면 합법 수와 최선 수가 없다", () => {
     const state = createInitialState();
     state.turn = state.maxTurns - 1;
+    state.actionsRemaining = 1;
     const lastMove = legalMoves(state)[0]!;
     const finished = applyMove(state, lastMove);
 
-    expect(finished.turn).toBe(60);
+    expect(finished.turn).toBe(finished.maxTurns);
     expect(legalMoves(finished)).toEqual([]);
     expect(search(finished, { depth: 2, evalFn: evalLv1 }).best).toBeNull();
   });
@@ -1069,7 +1087,7 @@ describe("경기 종료", () => {
     [{ home: 2, away: 1 }, { kind: "win", winner: "home", reason: "turnLimit" }],
     [{ home: 1, away: 2 }, { kind: "win", winner: "away", reason: "turnLimit" }],
     [{ home: 2, away: 2 }, { kind: "draw", reason: "turnLimit" }],
-  ] as const)("60 ply 결과를 점수로 판정한다: %o", (score, expected) => {
+  ] as const)("수 한도 결과를 점수로 판정한다: %o", (score, expected) => {
     const state = createInitialState();
     state.turn = state.maxTurns;
     state.score = { ...score };
@@ -1079,9 +1097,9 @@ describe("경기 종료", () => {
     expect(search(state, { depth: 2, evalFn: evalLv1 }).best).toBeNull();
   });
 
-  it("3골과 60 ply에 도달하지 않으면 진행 중이다", () => {
+  it("3골과 수 한도에 도달하지 않으면 진행 중이다", () => {
     const state = createInitialState();
-    state.turn = 59;
+    state.turn = state.maxTurns - 1;
     state.score = { home: 2, away: 2 };
 
     expect(gameResult(state)).toBeNull();
@@ -1192,7 +1210,10 @@ describe("완주 시뮬레이션", () => {
           const previous = state;
           state = applyMove(state, move);
 
-          expect(state.turn).toBe(previous.turn + (move.kind === "endTurn" ? 0 : 1));
+          // 수는 팀 턴이 끝날 때(팀 교대·득점)만 1 증가한다.
+          expect(state.turn).toBe(
+            previous.turn + (state.activeTeam !== previous.activeTeam ? 1 : 0),
+          );
           expect(state.turn).toBeLessThanOrEqual(state.maxTurns);
           expect(state.pieces).toHaveLength(12);
           expect(new Set(state.pieces.map((piece) => piece.id)).size).toBe(12);
@@ -1224,7 +1245,7 @@ describe("완주 시뮬레이션", () => {
         expect(legalMoves(state)).toEqual([]);
       }
     },
-    10_000,
+    40_000,
   );
 });
 
@@ -1245,7 +1266,7 @@ describe("팀 전술", () => {
     expect(targets).not.toContain(2);
   });
 
-  it("티키타카는 패스 5칸, 영향권 인터셉트 15%, MF 무료 패스를 준다", () => {
+  it("티키타카는 패스 5칸, 영향권 인터셉트 12%, MF 무료 패스를 준다", () => {
     const state = createInitialState({ home: "tikitaka" });
     // 캐리어 (6,4)에서 (6,8)은 거리 4로 가능, (12,8)은 거리 6으로 한도 5를 넘는다.
     setPos(state, 1, { x: 6, y: 8 });
@@ -1256,12 +1277,12 @@ describe("팀 전술", () => {
     expect(targets).toContain(1);
     expect(targets).not.toContain(2);
 
-    // (5,5)의 away MF가 (6,4)→(5,4) 패스 경로에 인접하면 인터셉트 확률이 15%다.
+    // (5,5)의 away MF가 (6,4)→(5,4) 패스 경로에 인접하면 인터셉트 확률이 12%다.
     setPos(state, 10, { x: 5, y: 5 });
     const pass = { kind: "pass", pieceId: 3, targetPieceId: 5 } as const;
     const outcomes = applyMoveOutcomes(state, pass);
     expect(outcomes[0]!.tag).toBe("zoneIntercept");
-    expect(outcomes[0]!.probability).toBeCloseTo(0.15, 9);
+    expect(outcomes[0]!.probability).toBeCloseTo(0.12, 9);
 
     // MF의 패스는 팀 행동은 소비하지만 선수별 상한에는 세지 않는다.
     const passed = applyMove(state, pass);
@@ -1373,7 +1394,11 @@ describe("탈취 관성", () => {
     setPos(state, 10, { x: 8, y: 5 });
     state.ball = { kind: "held", pieceId: 3 };
 
-    const stolen = applyMove(state, { kind: "steal", pieceId: 11, targetPieceId: 3 });
+    const stolen = applyMoveOutcomes(state, {
+      kind: "steal",
+      pieceId: 11,
+      targetPieceId: 3,
+    }).find((outcome) => outcome.tag === "stealSuccess")!.state;
 
     expect(stolen.ball).toEqual({ kind: "held", pieceId: 11 });
     expect(stolen.pieces.find((piece) => piece.id === 11)!.pos).toEqual({ x: 7, y: 4 });

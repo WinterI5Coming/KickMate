@@ -22,12 +22,22 @@ if (!Number.isInteger(DEPTH) || DEPTH < 1 || DEPTH > 4) {
   process.exit(1);
 }
 
+const maxTurnsArgIndex = process.argv.indexOf("--max-turns");
+const MAX_TURNS =
+  maxTurnsArgIndex >= 0 ? Number(process.argv[maxTurnsArgIndex + 1]) : null;
+if (MAX_TURNS !== null && (!Number.isInteger(MAX_TURNS) || MAX_TURNS < 12 || MAX_TURNS > 400)) {
+  console.error(`잘못된 수 한도입니다: ${process.argv[maxTurnsArgIndex + 1]}`);
+  process.exit(1);
+}
+
 interface MatchRecord {
   home: TeamStyle;
   away: TeamStyle;
   score: { home: number; away: number };
   plies: number;
   winner: "home" | "away" | "draw";
+  /** 3골 선취(scoreLimit)로 끝났는지, 수 한도(turnLimit)로 끝났는지. */
+  reason: "scoreLimit" | "turnLimit";
   ms: number;
 }
 
@@ -35,6 +45,7 @@ interface MatchRecord {
 function playMatch(home: TeamStyle, away: TeamStyle): MatchRecord {
   const startedAt = Date.now();
   let state: GameState = createInitialState({ home, away });
+  if (MAX_TURNS !== null) state = { ...state, maxTurns: MAX_TURNS };
   let plies = 0;
 
   while (gameResult(state) === null) {
@@ -54,19 +65,24 @@ function playMatch(home: TeamStyle, away: TeamStyle): MatchRecord {
     plies,
     winner:
       outcome?.kind === "win" ? outcome.winner : outcome?.kind === "draw" ? "draw" : "draw",
+    reason: outcome?.reason ?? "turnLimit",
     ms: Date.now() - startedAt,
   };
 }
 
 const records: MatchRecord[] = [];
-console.log(`셀프플레이: 전술 ${STYLES.length}종 × 홈·어웨이 = 16개 매치업, 깊이 ${DEPTH}`);
+console.log(
+  `셀프플레이: 전술 ${STYLES.length}종 × 홈·어웨이 = 16개 매치업, 깊이 ${DEPTH}` +
+    (MAX_TURNS !== null ? `, 수 한도 ${MAX_TURNS}` : ""),
+);
 for (const home of STYLES) {
   for (const away of STYLES) {
     const record = playMatch(home, away);
     records.push(record);
     console.log(
       `HOME ${record.home.padEnd(10)} vs AWAY ${record.away.padEnd(10)} → ` +
-        `${record.score.home}:${record.score.away} (${record.winner}, ${record.plies}수, ${(record.ms / 1000).toFixed(1)}s)`,
+        `${record.score.home}:${record.score.away} (${record.winner}, ${record.plies}수, ` +
+        `${record.reason === "scoreLimit" ? "3골 선취" : "수 한도"}, ${(record.ms / 1000).toFixed(1)}s)`,
     );
   }
 }
@@ -109,6 +125,9 @@ const totalGoals = records.reduce(
 );
 console.log("\n=== 전체 ===");
 console.log(`홈 ${homeWins}승 / 어웨이 ${awayWins}승 / 무 ${draws} (선공 밸런스)`);
+console.log(
+  `3골 선취 종료 ${records.filter((record) => record.reason === "scoreLimit").length} / ${records.length}`,
+);
 console.log(
   `평균 골 ${(totalGoals / records.length).toFixed(2)} · 평균 수 ${(
     records.reduce((sum, record) => sum + record.plies, 0) / records.length

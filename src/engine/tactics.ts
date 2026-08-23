@@ -41,7 +41,7 @@ export const TACTICS: Record<TeamStyle, TacticProfile> = {
   },
   tikitaka: {
     passMax: 5,
-    passZoneDeltaAsPasser: -0.05,
+    passZoneDeltaAsPasser: -0.08,
     passZoneDeltaAsDefender: 0,
     forwardDash: false,
     pressDash: false,
@@ -49,7 +49,7 @@ export const TACTICS: Record<TeamStyle, TacticProfile> = {
   },
   counter: {
     passMax: 5,
-    forwardPassMax: 7,
+    forwardPassMax: 6,
     passZoneDeltaAsPasser: 0,
     passZoneDeltaAsDefender: 0,
     forwardDash: true,

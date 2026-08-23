@@ -10,6 +10,13 @@
  */
 
 import { traceBallPath } from "./ballPath";
+import {
+  attackDirection,
+  BASE_ZONE_INTERCEPT,
+  passMaxBetween,
+  passZoneInterceptChance,
+  TACTICS,
+} from "./tactics";
 import type {
   GameResult,
   GameState,
@@ -19,6 +26,7 @@ import type {
   Piece,
   Pos,
   Team,
+  TeamStyle,
 } from "./types";
 import { BOARD_H, BOARD_W } from "./types";
 
@@ -42,8 +50,7 @@ const PIECES_PER_TEAM = HOME_START.length;
 /** 사용자가 직접 선택할 수 있는 상대 골문의 위·가운데·아래 행. */
 const GOAL_ROWS = [3, 4, 5] as const;
 
-/** 한 방향의 패스가 진행할 수 있는 최대 칸 수. */
-const PASS_MAX = 6;
+// 패스 최대 거리는 팀 전술이 정한다. `tactics.ts`의 `passMaxBetween()`을 사용한다.
 
 /** 공 소유자에서 상대 골라인까지 슛을 시도할 수 있는 최대 x 거리. */
 export const SHOT_MAX = 7;
@@ -62,8 +69,27 @@ const ACTIONS_PER_PIECE = 2;
 const SHOT_FIELD_BLOCK_CHANCE = 0.65;
 /** 슛 경로 위에 서 있는 상대 GK가 공을 선방할 확률. */
 const SHOT_GK_SAVE_CHANCE = 0.75;
-/** 공 경로에 8방향으로 인접한 상대 기물이 한 번 개입에 성공할 확률. 패스·슛 공통이다. */
-const ZONE_INTERVENE_CHANCE = 0.2;
+/** 슛 정확도가 1을 유지하는 골라인까지의 최대 x거리. */
+const SHOT_ACCURATE_RANGE = 3;
+/** 정확 사거리를 넘는 칸마다 감소하는 슛 정확도. */
+const SHOT_ACCURACY_FALLOFF = 0.15;
+/** 장거리 슛 정확도의 하한. */
+const SHOT_ACCURACY_FLOOR = 0.4;
+
+/**
+ * 슈터와 골라인 x거리에 따른 슛 정확도(과녁 안에 들어갈 확률).
+ *
+ * 3칸 이내는 1이고 이후 칸마다 0.15씩 감소해 7칸에서 0.4가 된다. 하프라인 저격 대신
+ * 전진 빌드업을 강제하려는 [실험 중] 수치다. 빗나간 슛은 골킥으로 상대 GK가 소유한다.
+ */
+function shotAccuracy(distanceToGoal: number): number {
+  return Math.max(
+    SHOT_ACCURACY_FLOOR,
+    Math.min(1, 1 - SHOT_ACCURACY_FALLOFF * (distanceToGoal - SHOT_ACCURATE_RANGE)),
+  );
+}
+// 영향권 개입 확률: 슛은 tactics.ts의 BASE_ZONE_INTERCEPT를 그대로 쓰고,
+// 패스는 양 팀 전술 보정을 합산한 passZoneInterceptChance()를 쓴다.
 
 /** 한 팀이 이 점수에 먼저 도달하면 최대 ply 전에 경기를 끝낸다. */
 export const WIN_SCORE = 3;
@@ -260,6 +286,14 @@ function analyzeBallMove(
   );
   const attempted = new Set<number>([actor.id]);
   const gates: BallGate[] = [];
+  // 패스 영향권은 패서(티키타카 -5%)와 수비(게겐프레싱 +5%) 전술 보정을 합산한다.
+  const zoneChance =
+    move.kind === "pass"
+      ? passZoneInterceptChance(
+          state.teamStyles[actor.team],
+          state.teamStyles[otherTeam(actor.team)],
+        )
+      : BASE_ZONE_INTERCEPT;
 
   for (const step of steps) {
     // 이 시점의 경로 칸에 인접한 상대의 영향권 개입을 점유 접촉보다 먼저 평가한다.
@@ -274,7 +308,7 @@ function analyzeBallMove(
       .sort((left, right) => left.id - right.id);
     for (const piece of zonePieces) {
       attempted.add(piece.id);
-      gates.push({ piece, chance: ZONE_INTERVENE_CHANCE, kind: "zone" });
+      gates.push({ piece, chance: zoneChance, kind: "zone" });
     }
 
     const occupants = state.pieces
@@ -296,7 +330,11 @@ function analyzeBallMove(
   return { path, gates, receiver: undefined };
 }
 
-/** 필드 차단 뒤 슈터 쪽으로 가까운 빈 인접 칸을 결정적으로 고른다. */
+/**
+ * 필드 차단 뒤 슈터에게서 먼 빈 인접 칸을 결정적으로 고른다.
+ *
+ * 슛을 막은 팀이 세컨볼 회수에서 우위를 갖도록 공은 수비 진영 쪽으로 튄다.
+ */
 function reboundPosition(state: GameState, blocker: Piece, shooter: Piece): Pos | null {
   return (
     DIRS_8.map((direction) => ({
@@ -308,9 +346,142 @@ function reboundPosition(state: GameState, blocker: Piece, shooter: Piece): Pos 
         const leftDistance = (left.x - shooter.pos.x) ** 2 + (left.y - shooter.pos.y) ** 2;
         const rightDistance =
           (right.x - shooter.pos.x) ** 2 + (right.y - shooter.pos.y) ** 2;
-        return leftDistance - rightDistance || left.y - right.y || left.x - right.x;
+        return rightDistance - leftDistance || left.y - right.y || left.x - right.x;
       })[0] ?? null
   );
+}
+
+/**
+ * 탈취 관성: 소유권을 빼앗은 기물을 상대에게서 가장 멀어지는 인접 빈 칸으로 한 칸 밀어낸다.
+ *
+ * 공을 되찾은 직후 상대에게 인접해 압박·재포위당하는 문제를 줄인다. 행동을 소비하지
+ * 않는 자동 이동이므로 결정론을 위해 후보 정렬(거리 내림차순, y, x)을 고정하고, 더
+ * 멀어지는 칸이 없으면 움직이지 않는다. GK는 자기 박스 안에서만 밀려난다.
+ */
+function applyMomentumEscape(state: GameState, pieceId: number): void {
+  const piece = requirePiece(state, pieceId);
+  const opponents = state.pieces.filter((candidate) => candidate.team !== piece.team);
+  if (opponents.length === 0) return;
+  const nearestOpponent = (pos: Pos) =>
+    Math.min(...opponents.map((opponent) => chebyshevDistance(pos, opponent.pos)));
+
+  const current = nearestOpponent(piece.pos);
+  const escape = DIRS_8.map((direction) => ({
+    x: piece.pos.x + direction.x,
+    y: piece.pos.y + direction.y,
+  }))
+    .filter(
+      (pos) =>
+        inBounds(pos) &&
+        !pieceAt(state, pos) &&
+        (piece.role !== "GK" || inGoalkeeperBox(piece.team, pos)),
+    )
+    .map((pos) => ({ pos, distance: nearestOpponent(pos) }))
+    .filter((candidate) => candidate.distance > current)
+    .sort(
+      (left, right) =>
+        right.distance - left.distance ||
+        left.pos.y - right.pos.y ||
+        left.pos.x - right.pos.x,
+    )[0];
+  if (escape) piece.pos = { ...escape.pos };
+}
+
+/**
+ * 평가 함수 전용의 빠른 최고 슛 득점 확률.
+ *
+ * `previewMove()`와 같은 관문 규칙(정확도 × 경로 위 개입 × 영향권 개입)을 계산하지만,
+ * 탐색 말단마다 호출되므로 경로 객체·정렬·집합 할당 없이 12비트 마스크와 격자 조회로
+ * 처리한다. 반환값은 세 골문 행 중 가장 높은 득점 확률(0..1)이다.
+ */
+export function bestShotGoalChance(state: GameState, carrier: Piece): number {
+  const goalX = carrier.team === "home" ? BOARD_W : -1;
+  const distanceToGoal = Math.abs(goalX - carrier.pos.x);
+  if (distanceToGoal > SHOT_MAX) return 0;
+  const accuracy = shotAccuracy(distanceToGoal);
+
+  // 칸 → 기물 인덱스 격자(없으면 -1). 한 호출에서 세 행이 공유한다.
+  const grid = new Int8Array(BOARD_W * BOARD_H).fill(-1);
+  for (let index = 0; index < state.pieces.length; index += 1) {
+    const pos = state.pieces[index]!.pos;
+    grid[pos.y * BOARD_W + pos.x] = index;
+  }
+
+  let best = 0;
+  for (const goalRow of GOAL_ROWS) {
+    // traceBallPath와 같은 정수 스텝으로 경로 칸을 수집한다(최대 여유 32칸).
+    const cellXs: number[] = [];
+    const cellYs: number[] = [];
+    const deltaX = goalX - carrier.pos.x;
+    const deltaY = goalRow - carrier.pos.y;
+    const horizontalSteps = Math.abs(deltaX);
+    const verticalSteps = Math.abs(deltaY);
+    const directionX = Math.sign(deltaX);
+    const directionY = Math.sign(deltaY);
+    let horizontalIndex = 0;
+    let verticalIndex = 0;
+    while (horizontalIndex < horizontalSteps || verticalIndex < verticalSteps) {
+      const decision =
+        (1 + 2 * horizontalIndex) * verticalSteps -
+        (1 + 2 * verticalIndex) * horizontalSteps;
+      if (decision === 0) {
+        cellXs.push(carrier.pos.x + (horizontalIndex + 1) * directionX);
+        cellYs.push(carrier.pos.y + verticalIndex * directionY);
+        cellXs.push(carrier.pos.x + horizontalIndex * directionX);
+        cellYs.push(carrier.pos.y + (verticalIndex + 1) * directionY);
+        horizontalIndex += 1;
+        verticalIndex += 1;
+      } else if (decision < 0) {
+        horizontalIndex += 1;
+      } else {
+        verticalIndex += 1;
+      }
+      cellXs.push(carrier.pos.x + horizontalIndex * directionX);
+      cellYs.push(carrier.pos.y + verticalIndex * directionY);
+    }
+
+    // 경로 점유 기물 마스크를 먼저 만들고(영향권 제외 대상), 관문을 곱한다.
+    let onPathMask = 0;
+    for (let cell = 0; cell < cellXs.length; cell += 1) {
+      const x = cellXs[cell]!;
+      const y = cellYs[cell]!;
+      if (x < 0 || x >= BOARD_W || y < 0 || y >= BOARD_H) continue;
+      const occupant = grid[y * BOARD_W + x]!;
+      if (occupant >= 0) onPathMask |= 1 << occupant;
+    }
+
+    let through = accuracy;
+    let attemptedMask = 1 << state.pieces.indexOf(carrier);
+    for (let cell = 0; cell < cellXs.length; cell += 1) {
+      const x = cellXs[cell]!;
+      const y = cellYs[cell]!;
+      if (x < 0 || x >= BOARD_W || y < 0 || y >= BOARD_H) continue;
+      // 영향권: 이 칸에 인접한, 경로 밖의 상대 기물.
+      for (let index = 0; index < state.pieces.length; index += 1) {
+        const bit = 1 << index;
+        if (attemptedMask & bit || onPathMask & bit) continue;
+        const piece = state.pieces[index]!;
+        if (piece.team === carrier.team) continue;
+        if (
+          Math.max(Math.abs(piece.pos.x - x), Math.abs(piece.pos.y - y)) === 1
+        ) {
+          attemptedMask |= bit;
+          through *= 1 - BASE_ZONE_INTERCEPT;
+        }
+      }
+      // 경로 위 점유 상대의 강한 개입.
+      const occupant = grid[y * BOARD_W + x]!;
+      if (occupant >= 0 && !(attemptedMask & (1 << occupant))) {
+        const piece = state.pieces[occupant]!;
+        if (piece.team !== carrier.team) {
+          attemptedMask |= 1 << occupant;
+          through *= 1 - shotBlockChance(piece);
+        }
+      }
+    }
+    if (through > best) best = through;
+  }
+  return best;
 }
 
 /**
@@ -354,6 +525,10 @@ export function previewMove(state: GameState, move: Move): MovePreview {
   const blocker = analysis.gates[0]?.piece;
   const reboundPos =
     blocker && blocker.role !== "GK" ? reboundPosition(state, blocker, actor) : null;
+  // 득점 확률 = 거리 정확도 × 모든 개입 실패 확률.
+  const accuracy = shotAccuracy(
+    Math.abs((actor.team === "home" ? BOARD_W : -1) - actor.pos.x),
+  );
   return {
     kind: "shoot",
     path: analysis.path,
@@ -368,7 +543,7 @@ export function previewMove(state: GameState, move: Move): MovePreview {
             : "fieldRebound",
     blockerPieceId: blocker?.id ?? null,
     reboundPos,
-    goalChance: throughChance,
+    goalChance: accuracy * throughChance,
   };
 }
 
@@ -409,6 +584,15 @@ function resetForKickoff(state: GameState, team: Team): void {
   // 정상 상태에는 각 팀 MF가 정확히 하나 존재한다는 룰 불변 조건에 의존한다.
   const midfielder = state.pieces.find((piece) => piece.team === team && piece.role === "MF")!;
   midfielder.pos = { x: 6, y: 4 };
+  // 센터서클 규칙: 상대 FW는 킥오프 때 한 칸 물러난다. 킥오프 소유자가 시작부터
+  // 압박당해 킥오프 자체가 불리해지는 선공 페널티를 없애기 위한 규칙이다.
+  const opposingForward = state.pieces.find(
+    (piece) => piece.team !== team && piece.role === "FW",
+  )!;
+  opposingForward.pos = {
+    x: opposingForward.pos.x - attackDirection(opposingForward.team),
+    y: opposingForward.pos.y,
+  };
   // 소유 중인 공은 별도 좌표 대신 소유 기물 ID로 위치를 표현한다.
   state.ball = { kind: "held", pieceId: midfielder.id };
   state.activeTeam = team;
@@ -429,7 +613,9 @@ function resetForKickoff(state: GameState, team: Team): void {
  * 반환할 때마다 새 기물·좌표·점수 객체를 만들므로 서로 다른 경기 상태가 내부 객체를
  * 공유하지 않는다.
  */
-export function createInitialState(): GameState {
+export function createInitialState(
+  styles?: Partial<Record<Team, TeamStyle>>,
+): GameState {
   const pieces: Piece[] = [];
 
   // `as const`로 반복 변수 team을 일반 string이 아닌 `"home" | "away"`로 유지한다.
@@ -458,6 +644,10 @@ export function createInitialState(): GameState {
     actionsRemaining: ACTIONS_PER_TEAM_TURN,
     actionCountByPiece: {},
     heldFirmPieceId: null,
+    teamStyles: {
+      home: styles?.home ?? "balanced",
+      away: styles?.away ?? "balanced",
+    },
     pieces,
     // 먼저 타입상 완전한 상태를 만든 뒤 아래 킥오프 함수가 held 상태로 교체한다.
     ball: { kind: "loose", pos: { x: 6, y: 4 } },
@@ -524,18 +714,55 @@ export function legalMoves(state: GameState): Move[] {
         moves.push({ kind: "move", pieceId: piece.id, to });
       }
     }
+
+    // 전술 대시: 중간 칸과 목적지가 모두 비어 있어야 직선 2칸을 달릴 수 있다.
+    const profile = TACTICS[state.teamStyles[team]];
+    const dashDirections: Pos[] = [];
+    if (profile.forwardDash && piece.role === "FW" && piece.id !== carrierId) {
+      // 역습: 공이 없는 FW가 공격 방향(직진·전방 대각)으로 2칸 대시한다.
+      const forwardX = attackDirection(team);
+      for (const dy of [-1, 0, 1]) dashDirections.push({ x: forwardX, y: dy });
+    }
+    if (
+      profile.pressDash &&
+      carrier &&
+      carrier.team !== team &&
+      // 압박 대시는 캐리어 주변 4칸 이내의 선수만 쓴다. 공에서 먼 선수까지 대시하면
+      // 탐색 분기가 폭발하고, 압박은 공 주변의 국지 행동이라는 의도와도 어긋난다.
+      chebyshevDistance(piece.pos, carrier.pos) <= 4
+    ) {
+      // 게겐프레싱: 상대 공 소유자에게 가까워지는 방향으로만 2칸 대시한다.
+      for (const direction of DIRS_8) dashDirections.push(direction);
+    }
+    for (const direction of dashDirections) {
+      const mid = { x: piece.pos.x + direction.x, y: piece.pos.y + direction.y };
+      const to = { x: piece.pos.x + direction.x * 2, y: piece.pos.y + direction.y * 2 };
+      if (!inBounds(mid) || !inBounds(to) || pieceAt(state, mid) || pieceAt(state, to)) {
+        continue;
+      }
+      if (
+        profile.pressDash &&
+        carrier &&
+        carrier.team !== team &&
+        chebyshevDistance(to, carrier.pos) >= chebyshevDistance(piece.pos, carrier.pos)
+      ) {
+        continue;
+      }
+      moves.push({ kind: "move", pieceId: piece.id, to });
+    }
   }
 
   // 패스와 슛은 현재 차례의 팀이 공을 실제로 보유할 때만 선택할 수 있다.
   if (carrier?.team === team && (state.actionCountByPiece[carrier.id] ?? 0) < ACTIONS_PER_PIECE) {
     // 경로가 막혔더라도 거리 안의 아군은 직접 선택할 수 있고 실제 수신자는 preview가 정한다.
+    // 최대 거리는 팀 전술과 패스 방향(역습의 전방 확장)에 따라 달라진다.
     for (const target of state.pieces) {
       if (target.team !== team || target.id === carrier.id) continue;
       const distance = Math.max(
         Math.abs(target.pos.x - carrier.pos.x),
         Math.abs(target.pos.y - carrier.pos.y),
       );
-      if (distance <= PASS_MAX) {
+      if (distance <= passMaxBetween(state.teamStyles[team], carrier, target)) {
         moves.push({ kind: "pass", pieceId: carrier.id, targetPieceId: target.id });
       }
     }
@@ -630,6 +857,7 @@ function cloneState(state: GameState): GameState {
         : { kind: "loose", pos: { ...state.ball.pos } },
     score: { ...state.score },
     actionCountByPiece: { ...state.actionCountByPiece },
+    teamStyles: { ...state.teamStyles },
     stealProtection: state.stealProtection ? { ...state.stealProtection } : null,
   };
 }
@@ -704,6 +932,16 @@ function enumerateResolutions(state: GameState, move: Move): ChanceResolution[] 
   const { gates } = analyzeBallMove(state, actor, move);
   const resolutions: ChanceResolution[] = [];
   let residual = 1;
+  if (move.kind === "shoot") {
+    // 거리 정확도 판정: 수비 개입과 무관하게 먼저 빗나갈 수 있고, 빗나가면 골킥이다.
+    const accuracy = shotAccuracy(
+      Math.abs((actor.team === "home" ? BOARD_W : -1) - actor.pos.x),
+    );
+    if (accuracy < 1) {
+      resolutions.push({ probability: 1 - accuracy, tag: "offTarget", stopGate: null });
+      residual = accuracy;
+    }
+  }
   for (const gate of gates) {
     const tag: MoveOutcome["tag"] =
       move.kind === "pass"
@@ -767,40 +1005,55 @@ function applyResolvedMove(
       // 영향권 인터셉트에 성공한 상대가 자기 칸에서 공을 소유하고 회수 유예를 받는다.
       next.ball = { kind: "held", pieceId: resolution.stopGate.piece.id };
       protectNewCarrier(next, resolution.stopGate.piece.id, team);
+      applyMomentumEscape(next, resolution.stopGate.piece.id);
     } else {
       const actor = requirePiece(next, move.pieceId);
       const receiver =
         analyzeBallMove(next, actor, move).receiver ?? requirePiece(next, move.targetPieceId);
       next.ball = { kind: "held", pieceId: receiver.id };
-      if (receiver.team !== team) protectNewCarrier(next, receiver.id, team);
+      if (receiver.team !== team) {
+        protectNewCarrier(next, receiver.id, team);
+        applyMomentumEscape(next, receiver.id);
+      }
     }
   } else if (move.kind === "shoot") {
-    if (resolution.stopGate === null) {
-      // 모든 개입을 뚫으면 득점하고 상대 팀이 센터에서 공을 갖도록 재배치한다.
+    if (resolution.tag === "offTarget") {
+      // 빗나간 슛은 골킥: 상대 GK가 공을 소유하고 회수 유예를 받는다.
+      const keeper = next.pieces.find(
+        (piece) => piece.team !== team && piece.role === "GK",
+      )!;
+      next.ball = { kind: "held", pieceId: keeper.id };
+      protectNewCarrier(next, keeper.id, team);
+    } else if (resolution.stopGate === null) {
+      // 정확도와 모든 개입을 뚫으면 득점하고 상대 팀이 센터에서 공을 갖도록 재배치한다.
       next.score[team] += 1;
       completeAtomicAction(next, move.pieceId);
       resetForKickoff(next, otherTeam(team));
       return next;
-    }
-    const blocker = requirePiece(next, resolution.stopGate.piece.id);
-    if (blocker.role === "GK") {
-      next.ball = { kind: "held", pieceId: blocker.id };
-      protectNewCarrier(next, blocker.id, team);
     } else {
-      const shooter = requirePiece(next, move.pieceId);
-      const reboundPos = reboundPosition(next, blocker, shooter);
-      if (reboundPos) {
-        next.ball = { kind: "loose", pos: { ...reboundPos } };
-        next.stealProtection = null;
-      } else {
+      const blocker = requirePiece(next, resolution.stopGate.piece.id);
+      if (blocker.role === "GK") {
         next.ball = { kind: "held", pieceId: blocker.id };
         protectNewCarrier(next, blocker.id, team);
+        applyMomentumEscape(next, blocker.id);
+      } else {
+        const shooter = requirePiece(next, move.pieceId);
+        const reboundPos = reboundPosition(next, blocker, shooter);
+        if (reboundPos) {
+          next.ball = { kind: "loose", pos: { ...reboundPos } };
+          next.stealProtection = null;
+        } else {
+          next.ball = { kind: "held", pieceId: blocker.id };
+          protectNewCarrier(next, blocker.id, team);
+          applyMomentumEscape(next, blocker.id);
+        }
       }
     }
   } else if (move.kind === "steal") {
     // 앞의 kind들을 제외하면 타입상 steal이며, 성공 확률 판정 없이 소유권이 이동한다.
     next.ball = { kind: "held", pieceId: move.pieceId };
     protectNewCarrier(next, move.pieceId, otherTeam(team));
+    applyMomentumEscape(next, move.pieceId);
   } else {
     next.heldFirmPieceId = move.pieceId;
   }
@@ -821,7 +1074,12 @@ function applyResolvedMove(
   ) {
     next.stealProtection = null;
   }
-  completeAtomicAction(next, move.pieceId, move.kind !== "hold");
+  // 티키타카의 MF 패스는 선수별 행동 상한에 세지 않아 연결 고리 역할을 이어갈 수 있다.
+  const freePass =
+    move.kind === "pass" &&
+    TACTICS[next.teamStyles[team]].midfielderFreePass &&
+    requirePiece(next, move.pieceId).role === "MF";
+  completeAtomicAction(next, move.pieceId, move.kind !== "hold" && !freePass);
   return next;
 }
 

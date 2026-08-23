@@ -76,6 +76,18 @@ export type BallState =
   | { kind: "held"; pieceId: number }
   | { kind: "loose"; pos: Pos };
 
+/**
+ * 팀이 경기 시작 시 선택하는 전술.
+ *
+ * - balanced: 현행 기본 규칙 그대로 (패스 6칸, 영향권 20%)
+ * - tikitaka: 짧고 안전한 패스와 MF 중심 연결
+ * - counter: 전방 장거리 전개와 FW의 전진 대시
+ * - gegenpress: 압박 대시와 강한 패스 차단
+ *
+ * 전술은 경기 중 변경되지 않으며 상태 전이는 이 값을 읽기만 한다.
+ */
+export type TeamStyle = "balanced" | "tikitaka" | "counter" | "gegenpress";
+
 /** 공을 잃은 팀의 다음 행동 하나를 막는 스틸 회수 유예를 기록한다. */
 export interface StealProtection {
   pieceId: number;
@@ -107,6 +119,8 @@ export interface GameState {
   actionCountByPiece: Record<number, number>;
   /** 버티기 후 한 번의 이동을 허용받은 기물 ID. */
   heldFirmPieceId: number | null;
+  /** 양 팀이 경기 시작 시 선택한 전술. 경기 중 바뀌지 않는다. */
+  teamStyles: Record<Team, TeamStyle>;
   /** 경기 중인 12개 기물. 각 팀은 GK 1명, DF 2명, MF 2명, FW 1명으로 구성된다. */
   pieces: Piece[];
   /** 현재 공의 소유 또는 루즈볼 위치. */
@@ -203,7 +217,8 @@ export interface MoveOutcome {
     | "fieldRebound"
     | "fieldPossession"
     | "zoneIntercept"
-    | "received";
+    | "received"
+    | "offTarget";
 }
 
 /**

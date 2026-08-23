@@ -9,7 +9,7 @@
  * 반환한다. 단, 실행 시간인 `ms`는 환경과 실행 시점에 따라 달라질 수 있다.
  */
 
-import { applyMoveOutcomes, gameResult, legalMoves, previewMove, sideToMove } from "./rules";
+import { applyMoveOutcomes, gameResult, legalMoves, sideToMove } from "./rules";
 import type { EvalFn, GameState, Move, SearchResult } from "./types";
 
 /** `search()`를 호출할 때 정하는 탐색 깊이와 말단 상태 평가 방법. */
@@ -39,12 +39,12 @@ function now(): number {
  * 높은 alpha를 일찍 확보하면 이후 후보의 알파베타 가지치기가 더 빨라질 수 있다.
  * 최종 최선 수는 이 rank가 아니라 재귀 탐색으로 얻은 실제 평가 점수로 결정한다.
  */
-function moveRank(state: GameState, move: Move): number {
+function moveRank(move: Move): number {
   switch (move.kind) {
-    case "shoot": {
-      const preview = previewMove(state, move);
-      return preview.kind === "shoot" && preview.goalChance >= 1 ? 100 : 60;
-    }
+    // 슛의 정밀한 득점 확률 계산(경로 추적)은 노드마다 하기에 비싸므로 정렬에서는
+    // 슛을 한 묶음으로 앞세우기만 한다. 최종 선택은 재귀 평가가 결정한다.
+    case "shoot":
+      return 80;
     case "steal":
       return 50;
     case "pass":
@@ -67,7 +67,7 @@ function moveRank(state: GameState, move: Move): number {
 function orderedMoves(state: GameState): Move[] {
   return legalMoves(state)
     // 정렬 뒤에도 원래 순서를 복원할 수 있도록 Move에 index와 rank를 임시로 붙인다.
-    .map((move, index) => ({ move, index, rank: moveRank(state, move) }))
+    .map((move, index) => ({ move, index, rank: moveRank(move) }))
     // `||` 오른쪽은 rank 차이가 0인 동점일 때만 원래 index의 오름차순을 적용한다.
     .sort((left, right) => right.rank - left.rank || left.index - right.index)
     // 정렬에만 필요했던 메타데이터를 제거하고 공개 타입인 Move[]로 되돌린다.

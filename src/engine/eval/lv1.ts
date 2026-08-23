@@ -10,37 +10,8 @@
  * 탐색이 더 유망한 수를 먼저 선택하도록 돕는 빠른 근사치다.
  */
 
-import { isStealProtected, previewMove } from "../rules";
-import { BOARD_W, type EvalFn, type GameState, type Piece } from "../types";
-
-/** 열린 슛 후보로 인정할 공 소유자와 상대 골라인 사이의 최대 x 거리. */
-const SHOT_MAX = 7;
-/** 사용자가 직접 선택할 수 있는 골문의 위·가운데·아래 행. */
-const GOAL_ROWS = [3, 4, 5] as const;
-
-/**
- * 공 소유자가 지금 시도할 수 있는 슛 중 가장 높은 득점 확률을 0..1로 반환한다.
- *
- * 실제 상태 전이와 같은 `previewMove()` 판정을 사용한다. 완전히 열린 슛은 1이고,
- * 수비 개입을 확률로 뚫어야 하는 슛은 그만큼 낮은 값이 된다. 골라인까지 7칸을 넘으면
- * 슛할 수 없으므로 0이다.
- */
-function bestShotChance(state: GameState, carrier: Piece): number {
-  const goalX = carrier.team === "home" ? BOARD_W : -1;
-  const distanceToGoal = Math.abs(goalX - carrier.pos.x);
-  if (distanceToGoal > SHOT_MAX) return 0;
-
-  let best = 0;
-  for (const goalRow of GOAL_ROWS) {
-    const preview = previewMove(state, {
-      kind: "shoot",
-      pieceId: carrier.id,
-      goalRow,
-    });
-    if (preview.kind === "shoot") best = Math.max(best, preview.goalChance);
-  }
-  return best;
-}
+import { bestShotGoalChance, isStealProtected } from "../rules";
+import type { EvalFn } from "../types";
 
 /**
  * `state`를 `perspective` 팀의 관점에서 평가한다.
@@ -64,7 +35,8 @@ export const evalLv1: EvalFn = (state, perspective) => {
     possessionValue += (carrier.team === "home" ? carrier.pos.x : 12 - carrier.pos.x) * 9;
 
     // 당장 시도할 수 있는 슛의 최고 득점 확률만큼 열린 슛 보너스 450을 비례 배분한다.
-    possessionValue += 450 * bestShotChance(state, carrier);
+    // 말단마다 호출되므로 previewMove 대신 할당 없는 전용 계산을 쓴다.
+    possessionValue += 450 * bestShotGoalChance(state, carrier);
 
     // 체비쇼프 거리 1은 실제 스틸 규칙과 같은 상하좌우·대각선 주변 8칸을 뜻한다.
     const underStealThreat = state.pieces.some(
